@@ -1431,8 +1431,7 @@ function startKioskCamera(){
   });
 
   kioskScanner.start(
-    // minta resolusi kamera yang cukup tinggi supaya garis-garis barcode tetap tajam & terbaca
-    { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    { facingMode: 'environment' },
     { fps: 12, qrbox: { width: 280, height: 170 }, aspectRatio: 1.4, disableFlip: false },
     (decodedText) => handleKioskScan(decodedText),
     () => { /* frame tanpa barcode terdeteksi — abaikan, ini normal & terus-menerus terjadi */ }
