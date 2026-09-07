@@ -1073,6 +1073,189 @@ function printBarcodeCard(code, nama, kelas, nis){
   w.document.close();
 }
 
+/* ---------------- CETAK KARTU BARCODE MASSAL (ukuran kartu pelajar) ----------------
+   Alur: pilih kelas (opsional) & centang siswa yang mau dicetak kartunya →
+   siswa yang belum punya kode Barcode akan dibuatkan otomatis (BK-<NIS/ID>) &
+   langsung disimpan supaya bisa dipindai di Mode Kamera → semua kartu dirender
+   dalam satu halaman cetak berukuran kartu pelajar standar (ID-1 / CR80,
+   85.6mm x 53.98mm) tersusun rapi di kertas A4, siap digunting/dilaminating. */
+function openBulkBarcodePrint(){
+  $('#modalTitle').textContent = 'Cetak Kartu Barcode (Massal)';
+  const kelasOpts = uniqueClasses().map(c => `<option value="${c}">${c}</option>`).join('');
+  const savedSchool = localStorage.getItem('bk_school_name') || '';
+  const savedYear = localStorage.getItem('bk_school_year') || '';
+  const esc = (s) => String(s||'').replace(/"/g, '&quot;');
+
+  $('#modalBody').innerHTML = `
+    <div class="field"><label>Kelas</label>
+      <select id="bcpKelas"><option value="">Semua Kelas</option>${kelasOpts}</select>
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>Nama Sekolah (tampil di kartu)</label>
+        <input type="text" id="bcpSekolah" value="${esc(savedSchool)}" placeholder="Contoh: SMP Negeri 1 Purwodadi" />
+      </div>
+      <div class="field"><label>Tahun Ajaran (opsional)</label>
+        <input type="text" id="bcpTahun" value="${esc(savedYear)}" placeholder="Contoh: 2025/2026" />
+      </div>
+    </div>
+    <p class="muted" style="margin:-6px 0 14px">Siswa yang belum punya kode barcode akan dibuatkan otomatis & disimpan, supaya langsung bisa dipindai di Mode Kamera.</p>
+    <div class="bulk-list-head">
+      <label class="checkbox-pill"><input type="checkbox" id="bcpCheckAll" /> Pilih Semua</label>
+      <span class="muted" id="bcpCount"></span>
+    </div>
+    <div class="bulk-siswa-list" id="bcpSiswaList"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="bcpCancel">Batal</button>
+      <button type="button" class="btn btn-primary" id="bcpSubmit"><i class="fa-solid fa-print"></i> Cetak Kartu Terpilih</button>
+    </div>`;
+
+  function updateBcpCount(){
+    const total = $all('.bcp-siswa-check').length;
+    const checked = $all('.bcp-siswa-check:checked').length;
+    $('#bcpCount').textContent = total ? `${checked} dari ${total} siswa dipilih` : 'Tidak ada data siswa.';
+  }
+  function renderBcpList(kelas){
+    const list = $('#bcpSiswaList');
+    const rows = STATE.siswa
+      .filter(s => !kelas || s.Kelas === kelas)
+      .sort((a,b) => (a.Kelas||'').localeCompare(b.Kelas||'') || (a.Nama||'').localeCompare(b.Nama||''));
+    if (!rows.length){
+      list.innerHTML = `<p class="muted">Tidak ada data siswa untuk pilihan ini.</p>`;
+      $('#bcpCheckAll').checked = false;
+      updateBcpCount();
+      return;
+    }
+    list.innerHTML = rows.map(s => `
+      <label class="checkbox-pill bulk-item">
+        <input type="checkbox" class="bcp-siswa-check" value="${s.ID}" checked />
+        ${avatarHtmlFor(s, 24)}
+        <span>${s.Nama||'-'} <span class="muted">· ${s.Kelas||'-'} · NIS ${s.NIS||'-'}</span></span>
+      </label>`).join('');
+    $('#bcpCheckAll').checked = true;
+    updateBcpCount();
+  }
+
+  renderBcpList('');
+  $('#bcpKelas').addEventListener('change', e => renderBcpList(e.target.value));
+  $('#bcpCheckAll').addEventListener('change', e => {
+    $all('.bcp-siswa-check').forEach(cb => cb.checked = e.target.checked);
+    updateBcpCount();
+  });
+  $('#bcpSiswaList').addEventListener('change', e => {
+    if (e.target.classList.contains('bcp-siswa-check')) updateBcpCount();
+  });
+  $('#bcpCancel').addEventListener('click', closeModal);
+
+  $('#bcpSubmit').addEventListener('click', async () => {
+    const ids = $all('.bcp-siswa-check:checked').map(cb => cb.value);
+    if (!ids.length){ toast('Pilih minimal satu siswa terlebih dahulu.', 'error'); return; }
+    const schoolName = $('#bcpSekolah').value.trim();
+    const schoolYear = $('#bcpTahun').value.trim();
+    localStorage.setItem('bk_school_name', schoolName);
+    localStorage.setItem('bk_school_year', schoolYear);
+
+    showLoading(true);
+    try{
+      const students = [];
+      for (const id of ids){
+        const s = siswaById(id);
+        if (!s) continue;
+        let code = (s.Barcode || '').toString().trim();
+        if (!code){
+          code = 'BK-' + (s.NIS || s.ID);
+          try{
+            const updated = await adapter.update('siswa', s.ID, { Barcode: code });
+            Object.assign(s, updated || {}, { Barcode: code });
+          }catch(e){ s.Barcode = code; }
+        }
+        students.push(s);
+      }
+      renderCurrentPage();
+      closeModal();
+      printBulkBarcodeCards(students, schoolName, schoolYear);
+    }catch(err){
+      toast(err.message, 'error');
+    }finally{
+      showLoading(false);
+    }
+  });
+
+  openModal();
+}
+$('#btnBulkPrintBarcode').addEventListener('click', openBulkBarcodePrint);
+
+function printBulkBarcodeCards(students, schoolName, schoolYear){
+  if (!students.length){ toast('Tidak ada siswa untuk dicetak.', 'error'); return; }
+  const w = window.open('', '_blank');
+  if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
+  const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  const cardsHtml = students.map((s, i) => `
+    <div class="card">
+      <div class="card-head">
+        ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
+        <div class="card-title">KARTU PELAJAR &middot; ABSENSI BARCODE</div>
+      </div>
+      <div class="card-body">
+        <div class="card-photo">${s.FotoURL ? `<img src="${s.FotoURL}" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
+        <div class="card-info">
+          <div class="card-nama">${safe(s.Nama) || '-'}</div>
+          <div class="card-meta">Kelas ${safe(s.Kelas) || '-'}</div>
+          <div class="card-meta">NIS ${safe(s.NIS) || '-'}</div>
+        </div>
+      </div>
+      <svg class="card-barcode" id="bc-${i}"></svg>
+      ${schoolYear ? `<div class="card-foot">Tahun Ajaran ${safe(schoolYear)}</div>` : ''}
+    </div>`).join('');
+
+  w.document.write(`<!DOCTYPE html><html><head><title>Cetak Kartu Barcode Siswa</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+    <style>
+      @page{ size:A4; margin:8mm; }
+      *{ box-sizing:border-box; }
+      body{ font-family:Arial, Helvetica, sans-serif; margin:0; padding:0; background:#e9edf1; }
+      .sheet{ display:flex; flex-wrap:wrap; gap:4mm; }
+      .card{
+        width:85.6mm; height:53.98mm; border:1px dashed #9aa5b1; border-radius:3mm; background:#fff;
+        padding:3mm 4mm; display:flex; flex-direction:column; justify-content:space-between;
+        page-break-inside:avoid; break-inside:avoid; overflow:hidden;
+      }
+      .card-head{ text-align:center; border-bottom:1.1px solid #2F6F63; padding-bottom:1.4mm; margin-bottom:1.4mm; }
+      .card-school{ font-size:9.5px; font-weight:700; color:#2F6F63; text-transform:uppercase; line-height:1.15; }
+      .card-title{ font-size:7px; font-weight:600; letter-spacing:.4px; color:#777; margin-top:.5mm; }
+      .card-body{ display:flex; align-items:center; gap:3mm; flex:1; min-height:0; }
+      .card-photo{
+        width:15mm; height:15mm; border-radius:50%; background:#EAF3F1; border:1px solid #2F6F63;
+        overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+        font-size:12px; font-weight:700; color:#2F6F63;
+      }
+      .card-photo img{ width:100%; height:100%; object-fit:cover; }
+      .card-info{ min-width:0; }
+      .card-nama{ font-size:11.5px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
+      .card-meta{ font-size:9px; color:#555; margin-top:1mm; }
+      .card-barcode{ width:100%; height:13mm; }
+      .card-foot{ text-align:center; font-size:7px; color:#888; }
+      @media print{
+        body{ background:#fff; }
+        .card{ border:1px dashed #ccc; }
+      }
+    </style></head><body>
+    <div class="sheet">${cardsHtml}</div>
+    <script>
+      window.onload = function(){
+        var data = ${JSON.stringify(students.map(s => (s.Barcode || '').toString()))};
+        data.forEach(function(code, i){
+          try{
+            JsBarcode('#bc-' + i, code, { format:'CODE128', displayValue:true, height:34, fontSize:10, margin:2, width:1.7 });
+          }catch(e){}
+        });
+        setTimeout(function(){ window.print(); }, 400);
+      };
+    <\/script>
+    </body></html>`);
+  w.document.close();
+}
+
 /* ---------------- ABSEN MASSAL PER KELAS ----------------
    Fitur tambahan di halaman Absensi: centang beberapa siswa sekaligus (mis. satu
    kelas masuk semua), pilih satu status, lalu simpan sekaligus. Tidak mengubah
@@ -1196,29 +1379,66 @@ $('#modalBackdrop').addEventListener('click', e => { if (e.target.id==='modalBac
    menunggu kartu berikutnya, tanpa perlu sentuh apa pun. */
 let kioskScanner = null;
 let kioskBusy = false;
+let kioskHintTimer = null;
 const KIOSK_RESULT_DELAY_OK = 3500;   // ms menampilkan hasil sebelum kembali standby
 const KIOSK_RESULT_DELAY_INFO = 3000;
 const KIOSK_RESULT_DELAY_ERR = 2200;
+const KIOSK_HINT_DELAY = 8000;        // ms sebelum menampilkan tips kalau belum ada barcode terdeteksi
+
+function showKioskHint(){
+  const el = $('#kioskResult');
+  // hanya timpa kalau masih standby (belum ada hasil scan lain yang sedang tampil)
+  if (el && el.querySelector('.kiosk-standby')){
+    el.innerHTML = `<div class="kiosk-standby"><i class="fa-solid fa-circle-info"></i>
+      <p>Belum terdeteksi. Pastikan barcode <b>tegak lurus &amp; rata</b> ke kamera, jarak sekitar 10–15&nbsp;cm, pencahayaan cukup, dan kartu tidak buram/silau/terlipat.
+      Kalau kamera tetap susah membaca, ketik/tempel kode atau gunakan alat pemindai USB &amp; Bluetooth lewat kolom di bawah kamera.</p></div>`;
+  }
+}
 
 function resetKioskStandby(){
   const el = $('#kioskResult');
   if (el) el.innerHTML = `<div class="kiosk-standby"><i class="fa-solid fa-id-card"></i><p>Kamera siap. Arahkan kartu barcode siswa ke kamera untuk absen otomatis.</p></div>`;
+  clearTimeout(kioskHintTimer);
+  kioskHintTimer = setTimeout(showKioskHint, KIOSK_HINT_DELAY);
+  const mi = $('#kioskManualInput');
+  if (mi){ mi.value = ''; mi.focus(); }
 }
 
 function startKioskCamera(){
   if (typeof Html5Qrcode === 'undefined'){
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-triangle-exclamation"></i><p>Pustaka pemindai barcode gagal dimuat. Periksa koneksi internet lalu buka kembali mode kamera ini.</p></div>`;
+    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-triangle-exclamation"></i><p>Pustaka pemindai barcode gagal dimuat. Periksa koneksi internet lalu buka kembali mode kamera ini. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
     return;
   }
-  kioskScanner = new Html5Qrcode('kioskReader');
+  // Barcode di kartu siswa dibuat format CODE128 (lihat printBarcodeCard), jadi pemindai
+  // difokuskan ke format barcode 1D yang umum (bukan cuma QR) supaya lebih akurat & cepat.
+  const formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.CODE_39,
+    Html5QrcodeSupportedFormats.CODE_93,
+    Html5QrcodeSupportedFormats.CODABAR,
+    Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A,
+    Html5QrcodeSupportedFormats.UPC_E,
+    Html5QrcodeSupportedFormats.ITF,
+    Html5QrcodeSupportedFormats.QR_CODE
+  ] : undefined;
+
+  kioskScanner = new Html5Qrcode('kioskReader', {
+    formatsToSupport: formats,
+    useBarCodeDetectorIfSupported: true, // pakai BarcodeDetector native browser kalau tersedia — jauh lebih akurat utk barcode 1D
+    verbose: false
+  });
+
   kioskScanner.start(
-    { facingMode: 'environment' },
-    { fps: 10, qrbox: { width: 260, height: 160 } },
+    // minta resolusi kamera yang cukup tinggi supaya garis-garis barcode tetap tajam & terbaca
+    { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    { fps: 12, qrbox: { width: 280, height: 170 }, aspectRatio: 1.4, disableFlip: false },
     (decodedText) => handleKioskScan(decodedText),
     () => { /* frame tanpa barcode terdeteksi — abaikan, ini normal & terus-menerus terjadi */ }
   ).catch(err => {
     toast('Tidak bisa mengakses kamera: ' + err, 'error');
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-video-slash"></i><p>Tidak bisa mengakses kamera. Pastikan browser diberi izin kamera, lalu coba lagi.</p></div>`;
+    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-video-slash"></i><p>Tidak bisa mengakses kamera. Pastikan browser diberi izin kamera, lalu coba lagi. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
   });
 }
 
@@ -1229,6 +1449,7 @@ function stopKioskCamera(){
     s.stop().then(() => s.clear()).catch(() => {});
   }
   kioskBusy = false;
+  clearTimeout(kioskHintTimer);
 }
 
 async function handleKioskScan(code){
@@ -1295,6 +1516,24 @@ function closeKiosk(){
 }
 $('#btnKioskAbsensi').addEventListener('click', openKiosk);
 $('#kioskCloseBtn').addEventListener('click', closeKiosk);
+
+/* Kolom ketik manual + alat pemindai barcode USB/Bluetooth (mode "keyboard wedge"):
+   alat-alat ini bekerja seperti mengetik cepat lalu menekan Enter, jadi kolom ini
+   sengaja selalu difokuskan ulang supaya siap menerima scan berikutnya tanpa perlu klik. */
+function submitKioskManual(){
+  const input = $('#kioskManualInput');
+  if (!input) return;
+  const code = input.value.trim();
+  if (!code) return;
+  input.value = '';
+  handleKioskScan(code);
+}
+const kioskManualBtn = $('#kioskManualBtn');
+const kioskManualInput = $('#kioskManualInput');
+if (kioskManualBtn) kioskManualBtn.addEventListener('click', submitKioskManual);
+if (kioskManualInput) kioskManualInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter'){ e.preventDefault(); submitKioskManual(); }
+});
 
 $('#btnAddSiswa').addEventListener('click', () => openForm('siswa'));
 $('#btnAddAbsensi').addEventListener('click', () => openForm('absensi'));
