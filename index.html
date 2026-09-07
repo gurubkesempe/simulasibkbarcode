@@ -119,6 +119,7 @@
             <button class="btn btn-ghost" id="btnDownloadTemplate" title="Unduh template Excel untuk diisi"><i class="fa-solid fa-file-arrow-down"></i> Template Excel</button>
             <button class="btn btn-ghost" id="btnImportSiswa" title="Upload data siswa dari file Excel"><i class="fa-solid fa-file-arrow-up"></i> Import Excel</button>
             <input type="file" id="importSiswaFile" accept=".xlsx,.xls" class="hidden" />
+            <button class="btn btn-ghost" id="btnBulkPrintBarcode" title="Cetak kartu barcode banyak siswa sekaligus, ukuran kartu pelajar"><i class="fa-solid fa-id-card"></i> Cetak Kartu Barcode (Massal)</button>
             <button class="btn btn-primary" id="btnAddSiswa"><i class="fa-solid fa-plus"></i> Tambah Siswa</button>
           </div>
         </div>
@@ -324,6 +325,12 @@
         <p>Kamera siap. Arahkan kartu barcode siswa ke kamera untuk absen otomatis.</p>
       </div>
     </div>
+  </div>
+  <div class="kiosk-manual-bar">
+    <i class="fa-solid fa-keyboard"></i>
+    <span>Kamera susah membaca barcode? Ketik/tempel kodenya, atau tembakkan alat pemindai barcode USB/Bluetooth ke kolom ini:</span>
+    <input type="text" id="kioskManualInput" placeholder="Ketik atau scan kode barcode di sini, lalu Enter" autocomplete="off" />
+    <button type="button" class="btn btn-primary btn-sm" id="kioskManualBtn"><i class="fa-solid fa-check"></i> Proses</button>
   </div>
 </div>
 
