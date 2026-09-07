@@ -712,7 +712,7 @@ const FORM_CONFIG = {
       { key:'Alamat', label:'Alamat', type:'textarea', full:true },
       { key:'Catatan', label:'Catatan Khusus', type:'textarea', full:true },
       { key:'FotoURL', label:'Foto Siswa', type:'photo', full:true },
-      { key:'Barcode', label:'Kode Barcode (untuk kartu absensi)', type:'barcode', full:true }
+      { key:'Barcode', label:'Kode QR (untuk kartu absensi)', type:'barcode', full:true }
     ]
   },
   absensi: {
@@ -850,10 +850,10 @@ function openForm(type, id, prefill){
           <button type="button" class="btn btn-ghost btn-sm barcode-gen-btn"><i class="fa-solid fa-shuffle"></i> Buat Otomatis</button>
         </div>
         <div class="barcode-preview-wrap">
-          <svg class="barcode-preview-svg"></svg>
-          <button type="button" class="btn btn-ghost btn-sm barcode-print-btn"><i class="fa-solid fa-print"></i> Cetak Kartu Barcode</button>
+          <img class="barcode-preview-svg qr-preview-img" alt="" />
+          <button type="button" class="btn btn-ghost btn-sm barcode-print-btn"><i class="fa-solid fa-print"></i> Cetak Kartu QR</button>
         </div>
-        <p class="muted photo-hint">Tempel/cetak kode ini di kartu siswa. Saat kartu ditunjukkan ke kamera di menu Absensi, siswa otomatis tercatat hadir.</p>
+        <p class="muted photo-hint">Tempel/cetak kode QR ini di kartu siswa. Saat kartu ditunjukkan ke kamera di menu Absensi, siswa otomatis tercatat hadir.</p>
       </div>`;
     }
     return `<div class="${wrapClass}"><label>${f.label}</label><input type="${f.type}" name="${f.key}" value="${val||''}" ${f.placeholder?`placeholder="${f.placeholder}"`:''} ${f.required?'required':''} /></div>`;
@@ -1006,17 +1006,20 @@ document.addEventListener('change', async e => {
   }
 });
 
-/* ---------------- KODE BARCODE SISWA (generate + preview + cetak kartu) ---------------- */
+/* ---------------- KODE QR SISWA (generate + preview + cetak kartu) ----------------
+   Sebelumnya pakai barcode batang (CODE128) tapi seringkali sulit terbaca kamera HP/webcam
+   karena butuh fokus & sudut yang presisi. QR code jauh lebih toleran terhadap sudut, jarak,
+   dan resolusi kamera yang seadanya, jadi lebih andal untuk absensi lewat kamera. */
 function refreshBarcodePreview(wrap){
   if (!wrap) return;
   const input = wrap.querySelector('.barcode-input');
-  const svg = wrap.querySelector('.barcode-preview-svg');
-  if (!input || !svg) return;
+  const img = wrap.querySelector('.barcode-preview-svg');
+  if (!input || !img) return;
   const val = input.value.trim();
-  if (!val || typeof JsBarcode === 'undefined'){ svg.innerHTML = ''; return; }
-  try{
-    JsBarcode(svg, val, { format:'CODE128', displayValue:true, height:46, fontSize:13, margin:6 });
-  }catch(e){ svg.innerHTML = ''; }
+  if (!val || typeof QRCode === 'undefined'){ img.src = ''; img.style.display='none'; return; }
+  QRCode.toDataURL(val, { margin: 1, width: 130 })
+    .then(url => { img.src = url; img.style.display='inline-block'; })
+    .catch(() => { img.src = ''; img.style.display='none'; });
 }
 document.addEventListener('input', e => {
   if (!e.target.classList.contains('barcode-input')) return;
@@ -1037,7 +1040,7 @@ document.addEventListener('click', e => {
   if (printBtn){
     const wrap = printBtn.closest('.field-barcode');
     const code = wrap.querySelector('.barcode-input').value.trim();
-    if (!code){ toast('Isi atau buat kode barcode terlebih dahulu.', 'error'); return; }
+    if (!code){ toast('Isi atau buat kode QR terlebih dahulu.', 'error'); return; }
     const namaInput = document.querySelector('#entityForm input[name="Nama"]');
     const kelasInput = document.querySelector('#entityForm input[name="Kelas"]');
     const nisInput = document.querySelector('#entityForm input[name="NIS"]');
@@ -1047,26 +1050,31 @@ document.addEventListener('click', e => {
 });
 
 function printBarcodeCard(code, nama, kelas, nis){
-  const w = window.open('', '_blank', 'width=440,height=340');
+  const w = window.open('', '_blank', 'width=440,height=440');
   if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
   const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  w.document.write(`<!DOCTYPE html><html><head><title>Kartu Barcode Siswa</title>
-    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+  w.document.write(`<!DOCTYPE html><html><head><title>Kartu QR Siswa</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
     <style>
       body{ font-family:Arial, sans-serif; text-align:center; padding:28px; }
-      .card{ border:2px solid #2F6F63; border-radius:12px; padding:18px 22px; display:inline-block; min-width:280px; }
+      .card{ border:2px solid #2F6F63; border-radius:12px; padding:18px 22px; display:inline-block; min-width:220px; }
       h3{ margin:0 0 2px; font-size:18px; }
       p{ margin:0 0 12px; color:#555; font-size:13px; }
+      img{ display:block; margin:0 auto; }
+      .code-text{ margin-top:8px; font-size:12px; color:#555; letter-spacing:.5px; }
     </style></head><body>
     <div class="card">
       <h3>${safe(nama) || '-'}</h3>
       <p>${safe(kelas) || '-'}${nis ? ' &middot; NIS ' + safe(nis) : ''}</p>
-      <svg id="bcSvg"></svg>
+      <img id="qrImg" width="180" height="180" />
+      <div class="code-text">${safe(code)}</div>
     </div>
     <script>
       window.onload = function(){
-        JsBarcode('#bcSvg', ${JSON.stringify(code)}, { format:'CODE128', displayValue:true, height:60, fontSize:15, margin:8 });
-        setTimeout(function(){ window.print(); }, 300);
+        QRCode.toDataURL(${JSON.stringify(code)}, { margin: 1, width: 220 }).then(function(url){
+          document.getElementById('qrImg').src = url;
+          setTimeout(function(){ window.print(); }, 300);
+        });
       };
     <\/script>
     </body></html>`);
@@ -1080,7 +1088,7 @@ function printBarcodeCard(code, nama, kelas, nis){
    dalam satu halaman cetak berukuran kartu pelajar standar (ID-1 / CR80,
    85.6mm x 53.98mm) tersusun rapi di kertas A4, siap digunting/dilaminating. */
 function openBulkBarcodePrint(){
-  $('#modalTitle').textContent = 'Cetak Kartu Barcode (Massal)';
+  $('#modalTitle').textContent = 'Cetak Kartu QR (Massal)';
   const kelasOpts = uniqueClasses().map(c => `<option value="${c}">${c}</option>`).join('');
   const savedSchool = localStorage.getItem('bk_school_name') || '';
   const savedYear = localStorage.getItem('bk_school_year') || '';
@@ -1098,7 +1106,7 @@ function openBulkBarcodePrint(){
         <input type="text" id="bcpTahun" value="${esc(savedYear)}" placeholder="Contoh: 2025/2026" />
       </div>
     </div>
-    <p class="muted" style="margin:-6px 0 14px">Siswa yang belum punya kode barcode akan dibuatkan otomatis & disimpan, supaya langsung bisa dipindai di Mode Kamera.</p>
+    <p class="muted" style="margin:-6px 0 14px">Siswa yang belum punya kode QR akan dibuatkan otomatis & disimpan, supaya langsung bisa dipindai di Mode Kamera.</p>
     <div class="bulk-list-head">
       <label class="checkbox-pill"><input type="checkbox" id="bcpCheckAll" /> Pilih Semua</label>
       <span class="muted" id="bcpCount"></span>
@@ -1194,7 +1202,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     <div class="card">
       <div class="card-head">
         ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
-        <div class="card-title">KARTU PELAJAR &middot; ABSENSI BARCODE</div>
+        <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR</div>
       </div>
       <div class="card-body">
         <div class="card-photo">${s.FotoURL ? `<img src="${s.FotoURL}" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
@@ -1203,13 +1211,13 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
           <div class="card-meta">Kelas ${safe(s.Kelas) || '-'}</div>
           <div class="card-meta">NIS ${safe(s.NIS) || '-'}</div>
         </div>
+        <img class="card-qr" id="bc-${i}" />
       </div>
-      <svg class="card-barcode" id="bc-${i}"></svg>
       ${schoolYear ? `<div class="card-foot">Tahun Ajaran ${safe(schoolYear)}</div>` : ''}
     </div>`).join('');
 
-  w.document.write(`<!DOCTYPE html><html><head><title>Cetak Kartu Barcode Siswa</title>
-    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+  w.document.write(`<!DOCTYPE html><html><head><title>Cetak Kartu QR Siswa</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
     <style>
       @page{ size:A4; margin:8mm; }
       *{ box-sizing:border-box; }
@@ -1223,17 +1231,17 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
       .card-head{ text-align:center; border-bottom:1.1px solid #2F6F63; padding-bottom:1.4mm; margin-bottom:1.4mm; }
       .card-school{ font-size:9.5px; font-weight:700; color:#2F6F63; text-transform:uppercase; line-height:1.15; }
       .card-title{ font-size:7px; font-weight:600; letter-spacing:.4px; color:#777; margin-top:.5mm; }
-      .card-body{ display:flex; align-items:center; gap:3mm; flex:1; min-height:0; }
+      .card-body{ display:flex; align-items:center; gap:2.5mm; flex:1; min-height:0; }
       .card-photo{
-        width:15mm; height:15mm; border-radius:50%; background:#EAF3F1; border:1px solid #2F6F63;
+        width:13mm; height:13mm; border-radius:50%; background:#EAF3F1; border:1px solid #2F6F63;
         overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center;
-        font-size:12px; font-weight:700; color:#2F6F63;
+        font-size:11px; font-weight:700; color:#2F6F63;
       }
       .card-photo img{ width:100%; height:100%; object-fit:cover; }
-      .card-info{ min-width:0; }
-      .card-nama{ font-size:11.5px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
-      .card-meta{ font-size:9px; color:#555; margin-top:1mm; }
-      .card-barcode{ width:100%; height:13mm; }
+      .card-info{ min-width:0; flex:1; }
+      .card-nama{ font-size:11px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
+      .card-meta{ font-size:8.5px; color:#555; margin-top:.8mm; }
+      .card-qr{ width:15mm; height:15mm; flex-shrink:0; }
       .card-foot{ text-align:center; font-size:7px; color:#888; }
       @media print{
         body{ background:#fff; }
@@ -1244,12 +1252,14 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     <script>
       window.onload = function(){
         var data = ${JSON.stringify(students.map(s => (s.Barcode || '').toString()))};
-        data.forEach(function(code, i){
-          try{
-            JsBarcode('#bc-' + i, code, { format:'CODE128', displayValue:true, height:34, fontSize:10, margin:2, width:1.7 });
-          }catch(e){}
+        Promise.all(data.map(function(code, i){
+          return QRCode.toDataURL(code, { margin: 1, width: 140 }).then(function(url){
+            var el = document.getElementById('bc-' + i);
+            if (el) el.src = url;
+          }).catch(function(){});
+        })).then(function(){
+          setTimeout(function(){ window.print(); }, 400);
         });
-        setTimeout(function(){ window.print(); }, 400);
       };
     <\/script>
     </body></html>`);
@@ -1371,8 +1381,8 @@ $('#btnBulkAbsensi').addEventListener('click', openBulkAbsensi);
 $('#modalClose').addEventListener('click', closeModal);
 $('#modalBackdrop').addEventListener('click', e => { if (e.target.id==='modalBackdrop') closeModal(); });
 
-/* ---------------- KIOSK ABSENSI KAMERA (scan kartu barcode) ----------------
-   Alur: kamera nyala & standby menunggu kartu barcode → siswa tunjukkan
+/* ---------------- KIOSK ABSENSI KAMERA (scan kartu QR) ----------------
+   Alur: kamera nyala & standby menunggu kartu QR → siswa tunjukkan
    kartu ke kamera → sistem mencocokkan kode dengan kolom Barcode di data
    siswa → kalau cocok, foto & nama siswa ditampilkan beberapa detik dan
    absensi (default: Hadir) langsung tersimpan → otomatis kembali standby
@@ -1390,14 +1400,14 @@ function showKioskHint(){
   // hanya timpa kalau masih standby (belum ada hasil scan lain yang sedang tampil)
   if (el && el.querySelector('.kiosk-standby')){
     el.innerHTML = `<div class="kiosk-standby"><i class="fa-solid fa-circle-info"></i>
-      <p>Belum terdeteksi. Pastikan barcode <b>tegak lurus &amp; rata</b> ke kamera, jarak sekitar 10–15&nbsp;cm, pencahayaan cukup, dan kartu tidak buram/silau/terlipat.
+      <p>Belum terdeteksi. Pastikan kode QR <b>tegak lurus &amp; utuh terlihat</b> di kamera, jarak sekitar 10–20&nbsp;cm, pencahayaan cukup, dan kartu tidak buram/silau/terlipat.
       Kalau kamera tetap susah membaca, ketik/tempel kode atau gunakan alat pemindai USB &amp; Bluetooth lewat kolom di bawah kamera.</p></div>`;
   }
 }
 
 function resetKioskStandby(){
   const el = $('#kioskResult');
-  if (el) el.innerHTML = `<div class="kiosk-standby"><i class="fa-solid fa-id-card"></i><p>Kamera siap. Arahkan kartu barcode siswa ke kamera untuk absen otomatis.</p></div>`;
+  if (el) el.innerHTML = `<div class="kiosk-standby"><i class="fa-solid fa-id-card"></i><p>Kamera siap. Arahkan kartu QR siswa ke kamera untuk absen otomatis.</p></div>`;
   clearTimeout(kioskHintTimer);
   kioskHintTimer = setTimeout(showKioskHint, KIOSK_HINT_DELAY);
   const mi = $('#kioskManualInput');
@@ -1406,12 +1416,14 @@ function resetKioskStandby(){
 
 function startKioskCamera(){
   if (typeof Html5Qrcode === 'undefined'){
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-triangle-exclamation"></i><p>Pustaka pemindai barcode gagal dimuat. Periksa koneksi internet lalu buka kembali mode kamera ini. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
+    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-triangle-exclamation"></i><p>Pustaka pemindai gagal dimuat. Periksa koneksi internet lalu buka kembali mode kamera ini. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
     return;
   }
-  // Barcode di kartu siswa dibuat format CODE128 (lihat printBarcodeCard), jadi pemindai
-  // difokuskan ke format barcode 1D yang umum (bukan cuma QR) supaya lebih akurat & cepat.
+  // Kartu siswa sekarang pakai kode QR (lihat printBarcodeCard) — QR jauh lebih toleran
+  // terhadap sudut/jarak/resolusi kamera seadanya dibanding barcode batang (CODE128).
+  // Format 1D lama tetap disertakan supaya kartu barcode yang sudah lanjut dicetak sebelumnya masih terbaca.
   const formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
+    Html5QrcodeSupportedFormats.QR_CODE,
     Html5QrcodeSupportedFormats.CODE_128,
     Html5QrcodeSupportedFormats.CODE_39,
     Html5QrcodeSupportedFormats.CODE_93,
@@ -1420,21 +1432,28 @@ function startKioskCamera(){
     Html5QrcodeSupportedFormats.EAN_8,
     Html5QrcodeSupportedFormats.UPC_A,
     Html5QrcodeSupportedFormats.UPC_E,
-    Html5QrcodeSupportedFormats.ITF,
-    Html5QrcodeSupportedFormats.QR_CODE
+    Html5QrcodeSupportedFormats.ITF
   ] : undefined;
 
   kioskScanner = new Html5Qrcode('kioskReader', {
     formatsToSupport: formats,
-    useBarCodeDetectorIfSupported: true, // pakai BarcodeDetector native browser kalau tersedia — jauh lebih akurat utk barcode 1D
+    useBarCodeDetectorIfSupported: true, // pakai BarcodeDetector native browser kalau tersedia — lebih cepat & akurat
     verbose: false
   });
 
   kioskScanner.start(
     { facingMode: 'environment' },
-    { fps: 12, qrbox: { width: 280, height: 170 }, aspectRatio: 1.4, disableFlip: false },
+    {
+      fps: 10,
+      // qrbox persegi (bukan memanjang) — cocok untuk kode QR, dan otomatis menyesuaikan
+      // ke ukuran video supaya tidak error di kamera dengan resolusi kecil.
+      qrbox: (viewfinderWidth, viewfinderHeight) => {
+        const size = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
+        return { width: Math.max(size, 150), height: Math.max(size, 150) };
+      }
+    },
     (decodedText) => handleKioskScan(decodedText),
-    () => { /* frame tanpa barcode terdeteksi — abaikan, ini normal & terus-menerus terjadi */ }
+    () => { /* frame tanpa kode terdeteksi — abaikan, ini normal & terus-menerus terjadi */ }
   ).catch(err => {
     toast('Tidak bisa mengakses kamera: ' + err, 'error');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-video-slash"></i><p>Tidak bisa mengakses kamera. Pastikan browser diberi izin kamera, lalu coba lagi. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
