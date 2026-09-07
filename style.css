@@ -323,6 +323,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 }
 .barcode-preview-svg{ max-width:220px; height:46px; }
 .barcode-preview-svg:empty{ display:none; }
+.qr-preview-img{ width:110px; height:110px; max-width:110px; object-fit:contain; background:#fff; border-radius:8px; display:none; }
+.qr-preview-img[src]:not([src=""]){ display:inline-block; }
 
 /* ============ KIOSK ABSENSI KAMERA (scan barcode) ============ */
 .kiosk-overlay{
