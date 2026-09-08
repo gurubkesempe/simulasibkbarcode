@@ -1062,8 +1062,11 @@ function printBarcodeCard(code, nama, kelas, nis){
   const w = window.open('', '_blank', 'width=440,height=440');
   if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
   const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  // QR digenerate DI HALAMAN INI (library-nya sudah pasti termuat, sama seperti preview di form),
+  // lalu hasilnya (data URL gambar) ditempel langsung ke jendela cetak. Jendela cetak jadi tidak
+  // perlu memuat library apa pun lagi — anti gagal walau internet lambat/diblokir firewall sekolah.
+  const qrDataUrl = makeQrDataUrl(code, 8, 4);
   w.document.write(`<!DOCTYPE html><html><head><title>Kartu QR Siswa</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/2.0.4/qrcode.min.js"><\/script>
     <style>
       body{ font-family:Arial, sans-serif; text-align:center; padding:28px; }
       .card{ border:2px solid #2F6F63; border-radius:12px; padding:18px 22px; display:inline-block; min-width:220px; }
@@ -1071,22 +1074,17 @@ function printBarcodeCard(code, nama, kelas, nis){
       p{ margin:0 0 12px; color:#555; font-size:13px; }
       img{ display:block; margin:0 auto; width:200px; height:200px; }
       .code-text{ margin-top:8px; font-size:12px; color:#555; letter-spacing:.5px; }
+      .qr-fail{ color:#c0392b; font-size:12px; }
     </style></head><body>
     <div class="card">
       <h3>${safe(nama) || '-'}</h3>
       <p>${safe(kelas) || '-'}${nis ? ' &middot; NIS ' + safe(nis) : ''}</p>
-      <img id="qrImg" />
+      ${qrDataUrl ? `<img id="qrImg" src="${qrDataUrl}" />` : `<p class="qr-fail">Gagal membuat QR. Tutup jendela ini &amp; coba lagi.</p>`}
       <div class="code-text">${safe(code)}</div>
     </div>
     <script>
       window.onload = function(){
-        try{
-          var qr = qrcode(0, 'M');
-          qr.addData(${JSON.stringify(code)});
-          qr.make();
-          document.getElementById('qrImg').src = qr.createDataURL(8, 4);
-        }catch(e){}
-        setTimeout(function(){ window.print(); }, 300);
+        setTimeout(function(){ window.print(); }, 250);
       };
     <\/script>
     </body></html>`);
@@ -1210,7 +1208,13 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
   if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
   const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
-  const cardsHtml = students.map((s, i) => `
+  // QR digenerate DI HALAMAN INI untuk tiap siswa (library sudah pasti termuat di sini),
+  // hasilnya (data URL gambar) langsung ditempel ke tiap kartu. Jendela cetak jadi tidak
+  // perlu memuat library apa pun lagi — anti gagal walau internet lambat/diblokir firewall sekolah.
+  const cardsHtml = students.map((s) => {
+    const code = (s.Barcode || '').toString();
+    const qrDataUrl = makeQrDataUrl(code, 5, 2);
+    return `
     <div class="card">
       <div class="card-head">
         ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
@@ -1223,13 +1227,13 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
           <div class="card-meta">Kelas ${safe(s.Kelas) || '-'}</div>
           <div class="card-meta">NIS ${safe(s.NIS) || '-'}</div>
         </div>
-        <img class="card-qr" id="bc-${i}" />
+        ${qrDataUrl ? `<img class="card-qr" src="${qrDataUrl}" />` : `<div class="card-qr card-qr--fail">QR gagal</div>`}
       </div>
       ${schoolYear ? `<div class="card-foot">Tahun Ajaran ${safe(schoolYear)}</div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   w.document.write(`<!DOCTYPE html><html><head><title>Cetak Kartu QR Siswa</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/2.0.4/qrcode.min.js"><\/script>
     <style>
       @page{ size:A4; margin:8mm; }
       *{ box-sizing:border-box; }
@@ -1254,6 +1258,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
       .card-nama{ font-size:11px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
       .card-meta{ font-size:8.5px; color:#555; margin-top:.8mm; }
       .card-qr{ width:15mm; height:15mm; flex-shrink:0; }
+      .card-qr--fail{ display:flex; align-items:center; justify-content:center; font-size:6px; color:#c0392b; border:1px dashed #c0392b; text-align:center; }
       .card-foot{ text-align:center; font-size:7px; color:#888; }
       @media print{
         body{ background:#fff; }
@@ -1263,17 +1268,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     <div class="sheet">${cardsHtml}</div>
     <script>
       window.onload = function(){
-        var data = ${JSON.stringify(students.map(s => (s.Barcode || '').toString()))};
-        data.forEach(function(code, i){
-          try{
-            var qr = qrcode(0, 'M');
-            qr.addData(code);
-            qr.make();
-            var el = document.getElementById('bc-' + i);
-            if (el) el.src = qr.createDataURL(5, 2);
-          }catch(e){}
-        });
-        setTimeout(function(){ window.print(); }, 400);
+        setTimeout(function(){ window.print(); }, 350);
       };
     <\/script>
     </body></html>`);
