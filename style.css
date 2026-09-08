@@ -319,11 +319,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .field-barcode .barcode-row input{ flex:1; }
 .barcode-preview-wrap{
   display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-top:10px; padding:10px 12px;
-  background:var(--surface-2); border-radius:var(--radius-sm); min-height:44px;
+  background:var(--surface-2); border-radius:var(--radius-sm); min-height:44px; flex-shrink:0;
 }
 .barcode-preview-svg{ max-width:220px; height:46px; }
 .barcode-preview-svg:empty{ display:none; }
-.qr-preview-img{ width:110px; height:110px; max-width:110px; object-fit:contain; background:#fff; border-radius:8px; display:none; }
+.qr-preview-img{ width:110px; height:110px; max-width:110px; object-fit:contain; background:#fff; border-radius:8px; display:none; flex-shrink:0; }
 .qr-preview-img[src]:not([src=""]){ display:inline-block; }
 
 /* ============ KIOSK ABSENSI KAMERA (scan barcode) ============ */
