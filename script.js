@@ -139,6 +139,35 @@ function fmtDate(d){
   return dt.toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' });
 }
 function initials(name){ return (name||'?').trim().split(/\s+/).slice(0,2).map(s=>s[0]).join('').toUpperCase(); }
+
+/* ---------------- KIRIM WA KE ORANG TUA (manual, via wa.me — gratis, tanpa API pihak ketiga) ---------------- */
+/* Rapikan nomor HP orang tua ke format wa.me (62xxxxxxxxxx, tanpa spasi/strip/tanda +).
+   Menerima input umum orang Indonesia: 08xxx, +62xxx, 62xxx, atau 8xxx polos. */
+function formatPhoneWa(raw){
+  let d = String(raw || '').replace(/[^0-9]/g, '');
+  if (!d) return '';
+  if (d.startsWith('0')) d = '62' + d.slice(1);
+  else if (!d.startsWith('62')) d = '62' + d;
+  return d;
+}
+function buildAbsenWaText(siswa, absen){
+  const namaOrtu = (siswa && siswa.NamaOrtu) ? `Bpk/Ibu ${siswa.NamaOrtu}` : 'Bapak/Ibu Orang Tua/Wali';
+  const tgl = fmtDate(absen.Tanggal);
+  const jam = new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' });
+  const ket = absen.Keterangan ? `\nKeterangan: ${absen.Keterangan}` : '';
+  return `Yth. ${namaOrtu},\n\nKami informasikan bahwa ananda *${(siswa && siswa.Nama) || absen.Nama || '-'}* (Kelas ${(siswa && siswa.Kelas) || absen.Kelas || '-'}) tercatat *${absen.Status}* di sekolah pada ${tgl} pukul ${jam}.${ket}\n\nTerima kasih atas perhatiannya.\n— Pesan dari BK Digital`;
+}
+/* Buka wa.me dengan pesan sudah terisi — guru/BK tinggal tap "Kirim" di WhatsApp.
+   Tidak ada yang terkirim otomatis tanpa tap manual ini (gratis, tanpa API pihak ketiga). */
+function openWaForAbsen(absenId){
+  const absen = STATE.absensi.find(a => String(a.ID) === String(absenId));
+  if (!absen){ toast('Data absensi tidak ditemukan.', 'error'); return; }
+  const siswa = STATE.siswa.find(s => String(s.ID) === String(absen.SiswaID));
+  const phone = formatPhoneWa(siswa ? siswa.NoHPOrtu : '');
+  if (!phone){ toast('Nomor HP orang tua belum diisi untuk siswa ini.', 'error'); return; }
+  const url = `https://wa.me/${phone}?text=${encodeURIComponent(buildAbsenWaText(siswa, absen))}`;
+  window.open(url, '_blank');
+}
 function colorFromString(str){
   const colors = ['#2F6F63','#E0932F','#3B7DD8','#D9614F','#8A5FC7','#3E9A63'];
   let h = 0; for (let i=0;i<(str||'').length;i++) h = str.charCodeAt(i) + ((h<<5)-h);
@@ -497,6 +526,7 @@ function renderAbsensi(searchQuery){
       <td><span class="badge badge--${badgeCls[a.Status]||'muted'}">${a.Status||'-'}</span></td>
       <td>${a.Keterangan||'-'}</td>
       <td><div class="row-actions">
+        <button class="icon-btn-sm wa" data-wa="${a.ID}" title="Kirim WA ke orang tua"><i class="fa-brands fa-whatsapp"></i></button>
         <button class="icon-btn-sm" data-edit="absensi" data-id="${a.ID}"><i class="fa-solid fa-pen"></i></button>
         <button class="icon-btn-sm danger" data-del="absensi" data-id="${a.ID}"><i class="fa-solid fa-trash"></i></button>
       </div></td></tr>`).join('');
@@ -677,6 +707,8 @@ document.addEventListener('click', async (e) => {
   const editBtn = e.target.closest('[data-edit]');
   const delBtn = e.target.closest('[data-del]');
   const printHabitBtn = e.target.closest('[data-print-habit]');
+  const waBtn = e.target.closest('[data-wa]');
+  if (waBtn){ openWaForAbsen(waBtn.dataset.wa); return; }
   if (printHabitBtn){ printKebiasaanForm(printHabitBtn.dataset.printHabit); return; }
   if (editBtn) openForm(editBtn.dataset.edit, editBtn.dataset.id);
   if (delBtn){

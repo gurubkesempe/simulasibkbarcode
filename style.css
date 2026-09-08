@@ -211,6 +211,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 }
 .icon-btn-sm:hover{ background:var(--surface-2); }
 .icon-btn-sm.danger:hover{ background:var(--danger-light); color:var(--danger); border-color:var(--danger-light); }
+.icon-btn-sm.wa:hover{ background:#e7f8ee; color:#1DA851; border-color:#bfe9d0; }
 
 .badge{ display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:700; }
 .badge-dot{ width:7px; height:7px; border-radius:50%; }
@@ -394,6 +395,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .kiosk-card--ok .kiosk-msg{ background:var(--success-light); color:var(--success); }
 .kiosk-card--warn .kiosk-msg{ background:var(--accent-light); color:var(--accent); }
 .kiosk-card--pending .kiosk-msg{ background:rgba(255,255,255,.15); color:#fff; }
+.btn-wa{ margin-top:14px; background:#25D366; color:#fff; }
+.btn-wa:hover{ background:#1DA851; }
 
 .kiosk-manual-bar{
   display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:14px 22px; background:rgba(0,0,0,.22);
