@@ -370,7 +370,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .kiosk-card--error i{ color:var(--danger); }
 .kiosk-card--error{ color:rgba(255,255,255,.85); }
 .kiosk-photo{
-  width:96px; height:96px; margin:0 auto 14px; font-size:30px; border:3px solid rgba(255,255,255,.4);
+  width:108px; height:108px; margin:0 auto 14px; font-size:34px; border:3px solid rgba(255,255,255,.45);
+  box-shadow:0 0 0 6px rgba(255,255,255,.08);
 }
 .kiosk-name{ font-family:var(--font-display); font-weight:800; font-size:19px; }
 .kiosk-sub{ font-size:13px; color:rgba(255,255,255,.7); margin-top:2px; }
