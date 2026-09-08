@@ -417,6 +417,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .kiosk-manual-bar > span{ display:none; }
 }
 
+/* ============ BACKUP DATABASE (di modal Pengaturan) ============ */
+.backup-box{ padding:12px 14px; background:var(--surface-2); border-radius:var(--radius-sm); margin-bottom:16px; }
+
 /* ============ MODAL ============ */
 .modal-backdrop{
   position:fixed; inset:0; background:rgba(20,26,34,.5); backdrop-filter:blur(2px);

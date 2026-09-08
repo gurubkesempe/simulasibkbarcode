@@ -1907,6 +1907,32 @@ $('#apiUrlSave').addEventListener('click', () => {
   note.after(a);
 })();
 
+/* ---------------- BACKUP DATABASE (Excel, satu file semua tabel) ----------------
+   Murni untuk jaga-jaga: unduh salinan semua data (Siswa, Absensi, Pelanggaran,
+   Konseling, Kolaborasi, 7 Kebiasaan) jadi satu file .xlsx, satu tab per jenis
+   data. Tidak mengubah data apapun di Sheet — cuma membaca STATE yang sedang
+   dimuat lalu menuliskannya ke file baru di komputer pengguna. */
+const BACKUP_SHEET_NAMES = { siswa:'Siswa', absensi:'Absensi', pelanggaran:'Pelanggaran', konseling:'Konseling', kolaborasi:'Kolaborasi', kebiasaan:'Kebiasaan' };
+function downloadFullBackup(){
+  if (!TYPES.some(t => STATE[t] && STATE[t].length)){
+    toast('Belum ada data yang bisa di-backup. Muat ulang data terlebih dahulu.', 'error');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  TYPES.forEach(type => {
+    const rows = (STATE[type] || []).map(r => {
+      // buang properti internal (mis. _row dari backend) agar file backup bersih
+      const { _row, ...clean } = r;
+      return clean;
+    });
+    const ws = rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([['(Belum ada data)']]);
+    XLSX.utils.book_append_sheet(wb, ws, BACKUP_SHEET_NAMES[type] || type);
+  });
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  XLSX.writeFile(wb, `Backup_BKDigital_${stamp}.xlsx`);
+  toast('Backup berhasil diunduh.', 'success');
+}
+
 /* Settings button lets user change/reset API URL */
 function openSettings(){
   $('#modalTitle').textContent = 'Pengaturan Koneksi';
@@ -1919,10 +1945,16 @@ function openSettings(){
       <label>Token / Kata Sandi Akses</label>
       <input type="password" id="settingsApiToken" value="${API_TOKEN}" placeholder="Sesuai ACCESS_TOKEN di Script Properties" />
     </div>
+    <div class="field full backup-box">
+      <label>Backup Database</label>
+      <p class="muted" style="margin:2px 0 10px">Unduh salinan semua data (Siswa, Absensi, Pelanggaran, Konseling, Kolaborasi, 7 Kebiasaan) jadi satu file Excel — untuk jaga-jaga, tidak mengubah data apapun di Sheet.</p>
+      <button class="btn btn-ghost" id="settingsBackupBtn" type="button"><i class="fa-solid fa-file-arrow-down"></i> Unduh Backup (Excel)</button>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="settingsDemoBtn" type="button">Gunakan Mode Demo</button>
       <button class="btn btn-primary" id="settingsSaveBtn" type="button"><i class="fa-solid fa-check"></i> Simpan &amp; Muat Ulang</button>
     </div>`;
+  $('#settingsBackupBtn').addEventListener('click', downloadFullBackup);
   $('#settingsSaveBtn').addEventListener('click', () => {
     const val = $('#settingsApiUrl').value.trim();
     const tokenVal = $('#settingsApiToken').value.trim();
