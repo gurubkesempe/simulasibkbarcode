@@ -686,7 +686,8 @@ document.addEventListener('click', async (e) => {
     try{
       await adapter.delete(type, id);
       STATE[type] = STATE[type].filter(o => String(o.ID) !== String(id));
-      renderCurrentPage(); renderDashboard(); populateClassFilters();
+      try{ renderCurrentPage(); renderDashboard(); populateClassFilters(); }
+      catch(renderErr){ console.warn('Data terhapus, tapi gagal me-refresh tampilan:', renderErr); }
       toast('Data berhasil dihapus.', 'success');
     }catch(err){ toast(err.message, 'error'); }
     finally{ showLoading(false); }
@@ -899,9 +900,8 @@ function openForm(type, id, prefill){
         toast('Data berhasil disimpan.', 'success');
       }
       closeModal();
-      populateClassFilters();
-      renderCurrentPage();
-      renderDashboard();
+      try{ populateClassFilters(); renderCurrentPage(); renderDashboard(); }
+      catch(renderErr){ console.warn('Data tersimpan, tapi gagal me-refresh tampilan:', renderErr); }
     }catch(err){
       toast(err.message, 'error');
     }finally{
@@ -1373,9 +1373,8 @@ function openBulkAbsensi(){
         saved++;
       }
       closeModal();
-      populateClassFilters();
-      renderCurrentPage();
-      renderDashboard();
+      try{ populateClassFilters(); renderCurrentPage(); renderDashboard(); }
+      catch(renderErr){ console.warn('Absensi massal tersimpan, tapi gagal me-refresh tampilan:', renderErr); }
       toast(`${saved} siswa dicatat sebagai ${status}${skipped ? `, ${skipped} dilewati (sudah ada catatan absensi tanggal ini)` : ''}.`, 'success');
     }catch(err){
       toast(err.message, 'error');
@@ -1547,9 +1546,18 @@ async function handleKioskScan(code){
     const data = { Tanggal: today, SiswaID: s.ID, Nama: s.Nama, Kelas: s.Kelas, Status: status, Keterangan: 'Absen otomatis via kamera (QR)' };
     const created = await adapter.create('absensi', data);
     STATE.absensi.push({ ...data, ...created });
-    populateClassFilters();
-    renderCurrentPage();
-    renderDashboard();
+
+    // Absensi SUDAH tersimpan di titik ini. Refresh tampilan (tabel/grafik) bersifat
+    // "best-effort" — kalau ada error di sini (mis. CDN Chart.js lambat/gagal dimuat),
+    // itu TIDAK BOLEH membuat notifikasi keliru melaporkan absensi gagal tersimpan.
+    try{
+      populateClassFilters();
+      renderCurrentPage();
+      renderDashboard();
+    }catch(renderErr){
+      console.warn('Absensi tersimpan, tapi gagal me-refresh tampilan:', renderErr);
+    }
+
     playKioskBeep('ok');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--ok">
         ${photoHtml}
