@@ -2,6 +2,22 @@
    BK DIGITAL — FRONTEND LOGIC
    ============================================================ */
 
+/* Escape data siswa/guru sebelum dimasukkan ke innerHTML, supaya data yang berisi
+   karakter HTML (mis. "<", ">", nama yang mengandung tag) tidak dieksekusi sebagai
+   kode di browser pengguna lain (mencegah stored XSS). SELALU pakai fungsi ini
+   untuk setiap nilai dari STATE (Nama, Kelas, Catatan, Keterangan, dst) yang
+   ditaruh lewat innerHTML/template string, kecuali memang sengaja HTML aman
+   yang kita tulis sendiri (mis. tag <tr>, <td> statis). */
+function escapeHtml(value){
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const TYPES = ['siswa','absensi','pelanggaran','konseling','kolaborasi','kebiasaan'];
 const STATE = { siswa:[], absensi:[], pelanggaran:[], konseling:[], kolaborasi:[], kebiasaan:[] };
 let API_URL = localStorage.getItem('bk_api_url') || '';
@@ -12,7 +28,9 @@ let charts = {};
 /* ---------------- ADAPTER: real Apps Script vs offline demo ---------------- */
 const RealAdapter = {
   async getAll(type){
-    const res = await fetch(`${API_URL}?action=getAll&type=${type}&token=${encodeURIComponent(API_TOKEN)}`);
+    // Token dikirim lewat body POST (bukan query string URL) supaya tidak
+    // tersimpan di riwayat browser / log server.
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'getAll', type, token: API_TOKEN }) });
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Gagal mengambil data');
     return json.data;
@@ -206,7 +224,7 @@ function populateClassFilters(){
   selectors.forEach(sel => {
     const el = $(sel); if (!el) return;
     const current = el.value;
-    el.innerHTML = '<option value="">Semua Kelas</option>' + classes.map(c => `<option value="${c}">${c}</option>`).join('');
+    el.innerHTML = '<option value="">Semua Kelas</option>' + classes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
     el.value = current;
   });
   populateReportSiswaSelect();
@@ -216,7 +234,7 @@ function populateReportSiswaSelect(){
   const el = $('#reportSiswa'); if (!el) return;
   const current = el.value;
   const sorted = STATE.siswa.slice().sort((a,b) => (a.Nama||'').localeCompare(b.Nama||''));
-  el.innerHTML = '<option value="">Pilih siswa...</option>' + sorted.map(s => `<option value="${s.ID}">${s.Nama} — ${s.Kelas}</option>`).join('');
+  el.innerHTML = '<option value="">Pilih siswa...</option>' + sorted.map(s => `<option value="${escapeHtml(s.ID)}">${escapeHtml(s.Nama)} — ${escapeHtml(s.Kelas)}</option>`).join('');
   el.value = current;
 }
 
@@ -292,19 +310,19 @@ function renderSearchDropdown(q){
   });
 
   if (!matchSiswa.length){
-    dd.innerHTML = `<div class="search-dd-empty">Tidak ada siswa yang cocok dengan "${q}".</div>`;
+    dd.innerHTML = `<div class="search-dd-empty">Tidak ada siswa yang cocok dengan "${escapeHtml(q)}".</div>`;
   } else {
     dd.innerHTML = matchSiswa.map(s => {
       const c = countsFor(s.ID);
       return `<div class="search-dd-item">
         ${avatarHtmlFor(s, 28)}
         <span class="search-dd-info">
-          <span class="search-dd-name">${s.Nama}</span>
-          <span class="search-dd-sub">${s.Kelas||'-'} · NIS ${s.NIS||'-'} ${c.pelanggaran?`· ${c.pelanggaran} pelanggaran`:''} ${c.absensiAlpa?`· ${c.absensiAlpa}x alpa`:''}</span>
+          <span class="search-dd-name">${escapeHtml(s.Nama)}</span>
+          <span class="search-dd-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')} ${c.pelanggaran?`· ${c.pelanggaran} pelanggaran`:''} ${c.absensiAlpa?`· ${c.absensiAlpa}x alpa`:''}</span>
         </span>
         <span class="search-dd-actions">
-          <button type="button" class="icon-btn-sm" data-quick-absensi="${s.ID}" title="Catat Absensi"><i class="fa-solid fa-calendar-check"></i></button>
-          <button type="button" class="icon-btn-sm" data-goto-siswa="${s.ID}" title="Lihat Laporan"><i class="fa-solid fa-file-lines"></i></button>
+          <button type="button" class="icon-btn-sm" data-quick-absensi="${escapeHtml(s.ID)}" title="Catat Absensi"><i class="fa-solid fa-calendar-check"></i></button>
+          <button type="button" class="icon-btn-sm" data-goto-siswa="${escapeHtml(s.ID)}" title="Lihat Laporan"><i class="fa-solid fa-file-lines"></i></button>
         </span>
       </div>`;
     }).join('');
@@ -352,9 +370,9 @@ function siswaPickerRenderDropdown(wrap, query){
   const dd = wrap.querySelector('.siswa-picker-dropdown');
   const matches = siswaPickerFilter(wrap, query);
   dd.innerHTML = matches.length ? matches.map(s => `
-      <button type="button" class="search-dd-item" data-pick-siswa="${s.ID}">
+      <button type="button" class="search-dd-item" data-pick-siswa="${escapeHtml(s.ID)}">
         ${avatarHtmlFor(s, 26)}
-        <span class="search-dd-info"><span class="search-dd-name">${s.Nama}</span><span class="search-dd-sub">${s.Kelas||'-'} · NIS ${s.NIS||'-'}</span></span>
+        <span class="search-dd-info"><span class="search-dd-name">${escapeHtml(s.Nama)}</span><span class="search-dd-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</span></span>
       </button>`).join('')
     : '<div class="search-dd-empty">Siswa tidak ditemukan untuk filter ini.</div>';
   dd.classList.add('open');
@@ -461,10 +479,10 @@ function renderAbsensiChart(canvasId, absensiData){
 
 function renderActivityList(){
   const items = [];
-  STATE.pelanggaran.forEach(p => items.push({ t:p.Tanggal, html:`<b>${p.Nama||'-'}</b> — pelanggaran: ${p.JenisPelanggaran||'-'}`, color:'#D9614F' }));
-  STATE.konseling.forEach(k => items.push({ t:k.Tanggal, html:`<b>${k.Nama||'-'}</b> — sesi konseling: ${k.Topik||'-'}`, color:'#3E9A63' }));
-  STATE.kolaborasi.forEach(k => items.push({ t:k.Tanggal, html:`<b>${k.Nama||'-'}</b> — ${k.Jenis||'-'}`, color:'#3B7DD8' }));
-  STATE.absensi.filter(a=>a.Status==='Alpa').forEach(a => items.push({ t:a.Tanggal, html:`<b>${a.Nama||'-'}</b> — tidak hadir tanpa keterangan`, color:'#E0932F' }));
+  STATE.pelanggaran.forEach(p => items.push({ t:p.Tanggal, html:`<b>${escapeHtml(p.Nama||'-')}</b> — pelanggaran: ${escapeHtml(p.JenisPelanggaran||'-')}`, color:'#D9614F' }));
+  STATE.konseling.forEach(k => items.push({ t:k.Tanggal, html:`<b>${escapeHtml(k.Nama||'-')}</b> — sesi konseling: ${escapeHtml(k.Topik||'-')}`, color:'#3E9A63' }));
+  STATE.kolaborasi.forEach(k => items.push({ t:k.Tanggal, html:`<b>${escapeHtml(k.Nama||'-')}</b> — ${escapeHtml(k.Jenis||'-')}`, color:'#3B7DD8' }));
+  STATE.absensi.filter(a=>a.Status==='Alpa').forEach(a => items.push({ t:a.Tanggal, html:`<b>${escapeHtml(a.Nama||'-')}</b> — tidak hadir tanpa keterangan`, color:'#E0932F' }));
   items.sort((a,b) => new Date(b.t) - new Date(a.t));
   const list = $('#activityList');
   if (!items.length){ list.innerHTML = '<li class="muted" style="border:none;padding:20px 4px;text-align:center">Belum ada aktivitas.</li>'; return; }
@@ -488,19 +506,19 @@ function renderSiswa(searchQuery){
     const pelanggaranCount = STATE.pelanggaran.filter(p => String(p.SiswaID)===String(s.ID)).length;
     const status = pelanggaranCount >= 3 ? { txt:'Perlu Perhatian', cls:'danger' } : pelanggaranCount >= 1 ? { txt:'Pemantauan', cls:'amber' } : { txt:'Baik', cls:'success' };
     return `<tr>
-      <td>${s.NIS||'-'}</td>
+      <td>${escapeHtml(s.NIS||'-')}</td>
       <td><div style="display:flex;align-items:center;gap:10px">
             ${avatarHtmlFor(s, 30)}
-            ${s.Nama||'-'}
+            ${escapeHtml(s.Nama||'-')}
           </div></td>
-      <td>${s.Kelas||'-'}</td>
-      <td>${s.JenisKelamin||'-'}</td>
-      <td>${s.NamaOrtu||'-'}</td>
-      <td>${s.NoHPOrtu||'-'}</td>
+      <td>${escapeHtml(s.Kelas||'-')}</td>
+      <td>${escapeHtml(s.JenisKelamin||'-')}</td>
+      <td>${escapeHtml(s.NamaOrtu||'-')}</td>
+      <td>${escapeHtml(s.NoHPOrtu||'-')}</td>
       <td><span class="badge badge--${status.cls}"><span class="badge-dot" style="background:currentColor"></span>${status.txt}</span></td>
       <td><div class="row-actions">
-            <button class="icon-btn-sm" data-edit="siswa" data-id="${s.ID}"><i class="fa-solid fa-pen"></i></button>
-            <button class="icon-btn-sm danger" data-del="siswa" data-id="${s.ID}"><i class="fa-solid fa-trash"></i></button>
+            <button class="icon-btn-sm" data-edit="siswa" data-id="${escapeHtml(s.ID)}"><i class="fa-solid fa-pen"></i></button>
+            <button class="icon-btn-sm danger" data-del="siswa" data-id="${escapeHtml(s.ID)}"><i class="fa-solid fa-trash"></i></button>
           </div></td>
     </tr>`;
   }).join('');
@@ -522,13 +540,13 @@ function renderAbsensi(searchQuery){
   emptyState.style.display='none';
   const badgeCls = { Hadir:'success', Sakit:'info', Izin:'amber', Alpa:'danger' };
   tbody.innerHTML = rows.map(a => `<tr>
-      <td>${fmtDate(a.Tanggal)}</td><td>${a.Nama||'-'}</td><td>${a.Kelas||'-'}</td>
-      <td><span class="badge badge--${badgeCls[a.Status]||'muted'}">${a.Status||'-'}</span></td>
-      <td>${a.Keterangan||'-'}</td>
+      <td>${fmtDate(a.Tanggal)}</td><td>${escapeHtml(a.Nama||'-')}</td><td>${escapeHtml(a.Kelas||'-')}</td>
+      <td><span class="badge badge--${badgeCls[a.Status]||'muted'}">${escapeHtml(a.Status||'-')}</span></td>
+      <td>${escapeHtml(a.Keterangan||'-')}</td>
       <td><div class="row-actions">
-        <button class="icon-btn-sm wa" data-wa="${a.ID}" title="Kirim WA ke orang tua"><i class="fa-brands fa-whatsapp"></i></button>
-        <button class="icon-btn-sm" data-edit="absensi" data-id="${a.ID}"><i class="fa-solid fa-pen"></i></button>
-        <button class="icon-btn-sm danger" data-del="absensi" data-id="${a.ID}"><i class="fa-solid fa-trash"></i></button>
+        <button class="icon-btn-sm wa" data-wa="${escapeHtml(a.ID)}" title="Kirim WA ke orang tua"><i class="fa-brands fa-whatsapp"></i></button>
+        <button class="icon-btn-sm" data-edit="absensi" data-id="${escapeHtml(a.ID)}"><i class="fa-solid fa-pen"></i></button>
+        <button class="icon-btn-sm danger" data-del="absensi" data-id="${escapeHtml(a.ID)}"><i class="fa-solid fa-trash"></i></button>
       </div></td></tr>`).join('');
 }
 ['#filterTglAbsensi','#filterKelasAbsensi','#filterStatusAbsensi'].forEach(sel => $(sel).addEventListener('change', renderAbsensi));
@@ -545,13 +563,13 @@ function renderPelanggaran(searchQuery){
   if (!rows.length){ tbody.innerHTML=''; emptyState.style.display='block'; return; }
   emptyState.style.display='none';
   tbody.innerHTML = rows.map(p => `<tr>
-      <td>${fmtDate(p.Tanggal)}</td><td>${p.Nama||'-'}</td><td>${p.Kelas||'-'}</td>
-      <td>${p.JenisPelanggaran||'-'}</td>
-      <td><span class="badge badge--danger">${p.Poin||0} poin</span></td>
-      <td>${p.Penanganan||'-'}</td>
+      <td>${fmtDate(p.Tanggal)}</td><td>${escapeHtml(p.Nama||'-')}</td><td>${escapeHtml(p.Kelas||'-')}</td>
+      <td>${escapeHtml(p.JenisPelanggaran||'-')}</td>
+      <td><span class="badge badge--danger">${escapeHtml(p.Poin||0)} poin</span></td>
+      <td>${escapeHtml(p.Penanganan||'-')}</td>
       <td><div class="row-actions">
-        <button class="icon-btn-sm" data-edit="pelanggaran" data-id="${p.ID}"><i class="fa-solid fa-pen"></i></button>
-        <button class="icon-btn-sm danger" data-del="pelanggaran" data-id="${p.ID}"><i class="fa-solid fa-trash"></i></button>
+        <button class="icon-btn-sm" data-edit="pelanggaran" data-id="${escapeHtml(p.ID)}"><i class="fa-solid fa-pen"></i></button>
+        <button class="icon-btn-sm danger" data-del="pelanggaran" data-id="${escapeHtml(p.ID)}"><i class="fa-solid fa-trash"></i></button>
       </div></td></tr>`).join('');
 }
 ['#filterKelasPelanggaran','#filterBulanPelanggaran'].forEach(sel => $(sel).addEventListener('change', renderPelanggaran));
@@ -568,20 +586,20 @@ function renderKonseling(searchQuery){
     <div class="entry-card">
       <div class="entry-card-head">
         <div class="entry-avatar-row">
-          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${initials(k.Nama)}</span>
-          <div><div class="entry-name">${k.Nama||'-'}</div><div class="entry-sub">${k.Kelas||'-'} · ${k.Topik||'Konseling'}</div></div>
+          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${escapeHtml(initials(k.Nama))}</span>
+          <div><div class="entry-name">${escapeHtml(k.Nama||'-')}</div><div class="entry-sub">${escapeHtml(k.Kelas||'-')} · ${escapeHtml(k.Topik||'Konseling')}</div></div>
         </div>
         <div class="row-actions">
-          <button class="icon-btn-sm" data-edit="konseling" data-id="${k.ID}"><i class="fa-solid fa-pen"></i></button>
-          <button class="icon-btn-sm danger" data-del="konseling" data-id="${k.ID}"><i class="fa-solid fa-trash"></i></button>
+          <button class="icon-btn-sm" data-edit="konseling" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-pen"></i></button>
+          <button class="icon-btn-sm danger" data-del="konseling" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-trash"></i></button>
         </div>
       </div>
       <div class="entry-body">
-        <p><b>Masalah:</b> ${k.Masalah||'-'}</p>
-        <p><b>Hasil:</b> ${k.HasilKonseling||'-'}</p>
-        <p><b>Tindak lanjut:</b> ${k.TindakLanjut||'-'}</p>
+        <p><b>Masalah:</b> ${escapeHtml(k.Masalah||'-')}</p>
+        <p><b>Hasil:</b> ${escapeHtml(k.HasilKonseling||'-')}</p>
+        <p><b>Tindak lanjut:</b> ${escapeHtml(k.TindakLanjut||'-')}</p>
       </div>
-      <div class="entry-foot"><span class="entry-date">${fmtDate(k.Tanggal)}</span><span class="entry-sub">${k.Konselor||''}</span></div>
+      <div class="entry-foot"><span class="entry-date">${fmtDate(k.Tanggal)}</span><span class="entry-sub">${escapeHtml(k.Konselor||'')}</span></div>
     </div>`).join('');
 }
 $('#filterKelasKonseling').addEventListener('change', renderKonseling);
@@ -598,20 +616,20 @@ function renderKolaborasi(searchQuery){
     <div class="entry-card">
       <div class="entry-card-head">
         <div class="entry-avatar-row">
-          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${initials(k.Nama)}</span>
-          <div><div class="entry-name">${k.Nama||'-'}</div><div class="entry-sub">${k.Kelas||'-'}</div></div>
+          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${escapeHtml(initials(k.Nama))}</span>
+          <div><div class="entry-name">${escapeHtml(k.Nama||'-')}</div><div class="entry-sub">${escapeHtml(k.Kelas||'-')}</div></div>
         </div>
         <div class="row-actions">
-          <button class="icon-btn-sm" data-edit="kolaborasi" data-id="${k.ID}"><i class="fa-solid fa-pen"></i></button>
-          <button class="icon-btn-sm danger" data-del="kolaborasi" data-id="${k.ID}"><i class="fa-solid fa-trash"></i></button>
+          <button class="icon-btn-sm" data-edit="kolaborasi" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-pen"></i></button>
+          <button class="icon-btn-sm danger" data-del="kolaborasi" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-trash"></i></button>
         </div>
       </div>
       <div class="entry-body">
-        <p><span class="badge badge--info">${k.Jenis||'-'}</span></p>
-        <p style="margin-top:8px"><b>Tujuan:</b> ${k.Tujuan||'-'}</p>
-        <p><b>Hasil:</b> ${k.Hasil||'-'}</p>
+        <p><span class="badge badge--info">${escapeHtml(k.Jenis||'-')}</span></p>
+        <p style="margin-top:8px"><b>Tujuan:</b> ${escapeHtml(k.Tujuan||'-')}</p>
+        <p><b>Hasil:</b> ${escapeHtml(k.Hasil||'-')}</p>
       </div>
-      <div class="entry-foot"><span class="entry-date">${fmtDate(k.Tanggal)}</span><span class="entry-sub">${k.Petugas||''}</span></div>
+      <div class="entry-foot"><span class="entry-date">${fmtDate(k.Tanggal)}</span><span class="entry-sub">${escapeHtml(k.Petugas||'')}</span></div>
     </div>`).join('');
 }
 $('#filterJenisKolaborasi').addEventListener('change', renderKolaborasi);
@@ -641,22 +659,22 @@ function renderKebiasaan(searchQuery){
     <div class="entry-card habit-card">
       <div class="entry-card-head">
         <div class="entry-avatar-row">
-          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${initials(k.Nama)}</span>
-          <div><div class="entry-name">${k.Nama||'-'}</div><div class="entry-sub">${k.Kelas||'-'} · ${fmtDate(k.Tanggal)}</div></div>
+          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${escapeHtml(initials(k.Nama))}</span>
+          <div><div class="entry-name">${escapeHtml(k.Nama||'-')}</div><div class="entry-sub">${escapeHtml(k.Kelas||'-')} · ${fmtDate(k.Tanggal)}</div></div>
         </div>
         <div class="row-actions">
-          <button class="icon-btn-sm" data-print-habit="${k.ID}" title="Cetak formulir"><i class="fa-solid fa-print"></i></button>
-          <button class="icon-btn-sm" data-edit="kebiasaan" data-id="${k.ID}"><i class="fa-solid fa-pen"></i></button>
-          <button class="icon-btn-sm danger" data-del="kebiasaan" data-id="${k.ID}"><i class="fa-solid fa-trash"></i></button>
+          <button class="icon-btn-sm" data-print-habit="${escapeHtml(k.ID)}" title="Cetak formulir"><i class="fa-solid fa-print"></i></button>
+          <button class="icon-btn-sm" data-edit="kebiasaan" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-pen"></i></button>
+          <button class="icon-btn-sm danger" data-del="kebiasaan" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-trash"></i></button>
         </div>
       </div>
       <div class="habit-grid">
-        ${habitDefs.map(h => `<div class="habit-item"><i class="fa-solid ${h.icon}"></i><div><span class="habit-label">${h.label}</span><span class="habit-value">${h.display(k[h.key], k)}</span></div></div>`).join('')}
+        ${habitDefs.map(h => `<div class="habit-item"><i class="fa-solid ${h.icon}"></i><div><span class="habit-label">${h.label}</span><span class="habit-value">${escapeHtml(h.display(k[h.key], k))}</span></div></div>`).join('')}
       </div>
       <div class="entry-foot">
         <span class="entry-sub">${habitDone(k.ParafOrtu)?'<i class="fa-solid fa-check" style="color:var(--success)"></i> Paraf Ortu':'<i class="fa-regular fa-circle" style="color:var(--ink-soft)"></i> Paraf Ortu'} &nbsp;&nbsp; ${habitDone(k.ParafGuru)?'<i class="fa-solid fa-check" style="color:var(--success)"></i> Paraf Guru':'<i class="fa-regular fa-circle" style="color:var(--ink-soft)"></i> Paraf Guru'}</span>
       </div>
-      ${k.CatatanGuru ? `<div class="habit-note"><b>Catatan Guru:</b> ${k.CatatanGuru}</div>` : ''}
+      ${k.CatatanGuru ? `<div class="habit-note"><b>Catatan Guru:</b> ${escapeHtml(k.CatatanGuru)}</div>` : ''}
     </div>`).join('');
 }
 $('#filterKelasKebiasaan').addEventListener('change', () => renderKebiasaan());
@@ -666,10 +684,10 @@ $('#filterTglKebiasaan').addEventListener('change', () => renderKebiasaan());
 function printKebiasaanForm(id){
   const k = STATE.kebiasaan.find(o => String(o.ID)===String(id));
   if (!k) return;
-  const row = (label, value) => `<tr><td class="hb-k">${label}</td><td class="hb-v">${value || '-'}</td></tr>`;
+  const row = (label, value) => `<tr><td class="hb-k">${escapeHtml(label)}</td><td class="hb-v">${escapeHtml(value) || '-'}</td></tr>`;
   const html = `
     <h2>7 Kebiasaan Anak Indonesia Hebat</h2>
-    <div class="report-head-line"><span>Nama: ${k.Nama||'-'} &nbsp;|&nbsp; Kelas: ${k.Kelas||'-'}</span><span>Hari, tanggal: ${fmtDate(k.Tanggal)}</span></div>
+    <div class="report-head-line"><span>Nama: ${escapeHtml(k.Nama||'-')} &nbsp;|&nbsp; Kelas: ${escapeHtml(k.Kelas||'-')}</span><span>Hari, tanggal: ${fmtDate(k.Tanggal)}</span></div>
     <table class="hb-table">
       <tbody>
         ${row('1. Bangun Pagi', 'Pukul: ' + (k.BangunPagiPukul||'-'))}
@@ -691,7 +709,7 @@ function printKebiasaanForm(id){
         <tr style="height:70px">
           <td>${habitDone(k.ParafOrtu)?'✓':''}</td>
           <td>${habitDone(k.ParafGuru)?'✓':''}</td>
-          <td>${k.CatatanGuru||''}</td>
+          <td>${escapeHtml(k.CatatanGuru||'')}</td>
         </tr>
       </tbody>
     </table>`;
@@ -835,19 +853,19 @@ function openForm(type, id, prefill){
     if (f.type === 'select-siswa'){
       const selSiswa = val ? siswaById(val) : null;
       const displayVal = selSiswa ? `${selSiswa.Nama} — ${selSiswa.Kelas||'-'}` : '';
-      const kelasOpts = uniqueClasses().map(c => `<option value="${c}">${c}</option>`).join('');
+      const kelasOpts = uniqueClasses().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       return `<div class="${wrapClass}"><label>${f.label}</label>
         <div class="siswa-picker">
           <div class="siswa-picker-row">
             <select class="siswa-picker-kelas" title="Filter kelas"><option value="">Semua Kelas</option>${kelasOpts}</select>
-            <input type="text" class="siswa-picker-input" autocomplete="off" placeholder="Ketik nama, NIS, atau kelas siswa..." value="${displayVal}" />
+            <input type="text" class="siswa-picker-input" autocomplete="off" placeholder="Ketik nama, NIS, atau kelas siswa..." value="${escapeHtml(displayVal)}" />
           </div>
-          <input type="hidden" name="${f.key}" value="${val||''}" />
+          <input type="hidden" name="${f.key}" value="${escapeHtml(val||'')}" />
           <div class="siswa-picker-dropdown search-dropdown"></div>
         </div></div>`;
     }
     if (f.type === 'textarea'){
-      return `<div class="${wrapClass}"><label>${f.label}</label><textarea name="${f.key}">${val||''}</textarea></div>`;
+      return `<div class="${wrapClass}"><label>${f.label}</label><textarea name="${f.key}">${escapeHtml(val||'')}</textarea></div>`;
     }
     if (f.type === 'checkbox-group'){
       const selected = (val||'').split(',').map(s=>s.trim());
@@ -864,7 +882,7 @@ function openForm(type, id, prefill){
       return `<div class="${wrapClass} field-photo">
         <label>${f.label}</label>
         <div class="photo-upload" id="photoUpload_${f.key}">
-          <div class="photo-preview" id="photoPreview_${f.key}">${val ? `<img src="${val}" alt="Foto siswa" />` : `<i class="fa-solid fa-user"></i>`}</div>
+          <div class="photo-preview" id="photoPreview_${f.key}">${val ? `<img src="${escapeHtml(val)}" alt="Foto siswa" />` : `<i class="fa-solid fa-user"></i>`}</div>
           <div class="photo-actions">
             <input type="file" accept="image/*" capture="environment" class="hidden photo-file-input" id="photoFile_${f.key}" />
             <button type="button" class="btn btn-ghost btn-sm photo-pick-btn" data-photo-key="${f.key}"><i class="fa-solid fa-camera"></i> Ambil / Upload Foto</button>
@@ -872,14 +890,14 @@ function openForm(type, id, prefill){
           </div>
           <p class="photo-hint muted">Foto otomatis dikompres &amp; disimpan langsung di Google Sheet (tanpa Google Drive).</p>
         </div>
-        <input type="hidden" name="${f.key}" value="${val||''}" />
+        <input type="hidden" name="${f.key}" value="${escapeHtml(val||'')}" />
       </div>`;
     }
     if (f.type === 'barcode'){
       return `<div class="${wrapClass} field-barcode">
         <label>${f.label}</label>
         <div class="barcode-row">
-          <input type="text" name="${f.key}" class="barcode-input" value="${val||''}" placeholder="contoh: BK-2201001" autocomplete="off" />
+          <input type="text" name="${f.key}" class="barcode-input" value="${escapeHtml(val||'')}" placeholder="contoh: BK-2201001" autocomplete="off" />
           <button type="button" class="btn btn-ghost btn-sm barcode-gen-btn"><i class="fa-solid fa-shuffle"></i> Buat Otomatis</button>
         </div>
         <div class="barcode-preview-wrap">
@@ -889,7 +907,7 @@ function openForm(type, id, prefill){
         <p class="muted photo-hint">Tempel/cetak kode QR ini di kartu siswa. Saat kartu ditunjukkan ke kamera di menu Absensi, siswa otomatis tercatat hadir.</p>
       </div>`;
     }
-    return `<div class="${wrapClass}"><label>${f.label}</label><input type="${f.type}" name="${f.key}" value="${val||''}" ${f.placeholder?`placeholder="${f.placeholder}"`:''} ${f.required?'required':''} /></div>`;
+    return `<div class="${wrapClass}"><label>${f.label}</label><input type="${f.type}" name="${f.key}" value="${escapeHtml(val||'')}" ${f.placeholder?`placeholder="${escapeHtml(f.placeholder)}"`:''} ${f.required?'required':''} /></div>`;
   }).join('');
 
   $('#modalBody').innerHTML = `
@@ -951,10 +969,10 @@ function closeModal(){ $('#modalBackdrop').classList.remove('open'); }
 function avatarHtmlFor(s, size){
   size = size || 30;
   if (s && s.FotoURL){
-    return `<img src="${s.FotoURL}" alt="${s.Nama||''}" class="avatar-ring avatar-photo" style="width:${size}px;height:${size}px;object-fit:cover;" />`;
+    return `<img src="${escapeHtml(s.FotoURL)}" alt="${escapeHtml(s.Nama||'')}" class="avatar-ring avatar-photo" style="width:${size}px;height:${size}px;object-fit:cover;" />`;
   }
   const nama = s ? s.Nama : '';
-  return `<span class="avatar-ring" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.36)}px;background:${colorFromString(nama)}">${initials(nama)}</span>`;
+  return `<span class="avatar-ring" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.36)}px;background:${colorFromString(nama)}">${escapeHtml(initials(nama))}</span>`;
 }
 
 /* ---------------- UPLOAD & KOMPRESI FOTO SISWA ----------------
@@ -1000,7 +1018,7 @@ function setPhotoValue(key, dataUrl){
   const hidden = wrap.parentElement.querySelector(`input[type=hidden][name="${key}"]`);
   if (hidden) hidden.value = dataUrl || '';
   const preview = $(`#photoPreview_${key}`);
-  if (preview) preview.innerHTML = dataUrl ? `<img src="${dataUrl}" alt="Foto siswa" />` : `<i class="fa-solid fa-user"></i>`;
+  if (preview) preview.innerHTML = dataUrl ? `<img src="${escapeHtml(dataUrl)}" alt="Foto siswa" />` : `<i class="fa-solid fa-user"></i>`;
   const actions = wrap.querySelector('.photo-actions');
   let removeBtn = wrap.querySelector('.photo-remove-btn');
   if (dataUrl && !removeBtn && actions){
@@ -1131,10 +1149,10 @@ function printBarcodeCard(code, nama, kelas, nis){
    85.6mm x 53.98mm) tersusun rapi di kertas A4, siap digunting/dilaminating. */
 function openBulkBarcodePrint(){
   $('#modalTitle').textContent = 'Cetak Kartu QR (Massal)';
-  const kelasOpts = uniqueClasses().map(c => `<option value="${c}">${c}</option>`).join('');
+  const kelasOpts = uniqueClasses().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   const savedSchool = localStorage.getItem('bk_school_name') || '';
   const savedYear = localStorage.getItem('bk_school_year') || '';
-  const esc = (s) => String(s||'').replace(/"/g, '&quot;');
+  const esc = escapeHtml;
 
   $('#modalBody').innerHTML = `
     <div class="field"><label>Kelas</label>
@@ -1177,9 +1195,9 @@ function openBulkBarcodePrint(){
     }
     list.innerHTML = rows.map(s => `
       <label class="checkbox-pill bulk-item">
-        <input type="checkbox" class="bcp-siswa-check" value="${s.ID}" checked />
+        <input type="checkbox" class="bcp-siswa-check" value="${escapeHtml(s.ID)}" checked />
         ${avatarHtmlFor(s, 24)}
-        <span>${s.Nama||'-'} <span class="muted">· ${s.Kelas||'-'} · NIS ${s.NIS||'-'}</span></span>
+        <span>${escapeHtml(s.Nama||'-')} <span class="muted">· ${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</span></span>
       </label>`).join('');
     $('#bcpCheckAll').checked = true;
     updateBcpCount();
@@ -1253,7 +1271,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
         <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR</div>
       </div>
       <div class="card-body">
-        <div class="card-photo">${s.FotoURL ? `<img src="${s.FotoURL}" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
+        <div class="card-photo">${s.FotoURL ? `<img src="${safe(s.FotoURL)}" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
         <div class="card-info">
           <div class="card-nama">${safe(s.Nama) || '-'}</div>
           <div class="card-meta">Kelas ${safe(s.Kelas) || '-'}</div>
@@ -1315,7 +1333,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
 function openBulkAbsensi(){
   $('#modalTitle').textContent = 'Absen Massal per Kelas';
   const today = new Date().toISOString().slice(0,10);
-  const kelasOpts = uniqueClasses().map(c => `<option value="${c}">${c}</option>`).join('');
+  const kelasOpts = uniqueClasses().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
 
   $('#modalBody').innerHTML = `
     <form id="bulkAbsensiForm">
@@ -1364,9 +1382,9 @@ function openBulkAbsensi(){
     }
     list.innerHTML = siswaKelas.map(s => `
       <label class="checkbox-pill bulk-item">
-        <input type="checkbox" class="bulk-siswa-check" value="${s.ID}" checked />
-        <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${initials(s.Nama)}</span>
-        <span>${s.Nama} <span class="muted">· NIS ${s.NIS||'-'}</span></span>
+        <input type="checkbox" class="bulk-siswa-check" value="${escapeHtml(s.ID)}" checked />
+        <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+        <span>${escapeHtml(s.Nama)} <span class="muted">· NIS ${escapeHtml(s.NIS||'-')}</span></span>
       </label>`).join('');
     $('#bulkCheckAll').checked = true;
     updateBulkCount();
@@ -1561,7 +1579,7 @@ async function handleKioskScan(code){
 
   if (!s){
     playKioskBeep('error');
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Kode <b>${cleanCode}</b> tidak terdaftar sebagai kode QR siswa manapun.</p></div>`;
+    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Kode <b>${escapeHtml(cleanCode)}</b> tidak terdaftar sebagai kode QR siswa manapun.</p></div>`;
     setTimeout(() => { resetKioskStandby(); kioskBusy = false; }, KIOSK_RESULT_DELAY_ERR);
     return;
   }
@@ -1574,9 +1592,9 @@ async function handleKioskScan(code){
     playKioskBeep('error');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--warn">
         ${photoHtml}
-        <div class="kiosk-name">${s.Nama}</div>
-        <div class="kiosk-sub">${s.Kelas||'-'} · NIS ${s.NIS||'-'}</div>
-        <div class="kiosk-msg"><i class="fa-solid fa-clock-rotate-left"></i> Sudah tercatat hari ini: <b>${already.Status}</b></div>
+        <div class="kiosk-name">${escapeHtml(s.Nama)}</div>
+        <div class="kiosk-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</div>
+        <div class="kiosk-msg"><i class="fa-solid fa-clock-rotate-left"></i> Sudah tercatat hari ini: <b>${escapeHtml(already.Status)}</b></div>
       </div>`;
     setTimeout(() => { resetKioskStandby(); kioskBusy = false; }, KIOSK_RESULT_DELAY_INFO);
     return;
@@ -1584,8 +1602,8 @@ async function handleKioskScan(code){
 
   $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--pending">
       ${photoHtml}
-      <div class="kiosk-name">${s.Nama}</div>
-      <div class="kiosk-sub">${s.Kelas||'-'} · NIS ${s.NIS||'-'}</div>
+      <div class="kiosk-name">${escapeHtml(s.Nama)}</div>
+      <div class="kiosk-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</div>
       <div class="kiosk-msg"><i class="fa-solid fa-spinner fa-spin"></i> Menyimpan absensi...</div>
     </div>`;
   try{
@@ -1607,13 +1625,13 @@ async function handleKioskScan(code){
     playKioskBeep('ok');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--ok">
         ${photoHtml}
-        <div class="kiosk-name">${s.Nama}</div>
-        <div class="kiosk-sub">${s.Kelas||'-'} · NIS ${s.NIS||'-'}</div>
-        <div class="kiosk-msg"><i class="fa-solid fa-circle-check"></i> Absen berhasil — ${status}</div>
+        <div class="kiosk-name">${escapeHtml(s.Nama)}</div>
+        <div class="kiosk-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</div>
+        <div class="kiosk-msg"><i class="fa-solid fa-circle-check"></i> Absen berhasil — ${escapeHtml(status)}</div>
       </div>`;
   }catch(err){
     playKioskBeep('error');
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Gagal menyimpan absensi: ${err.message}</p></div>`;
+    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Gagal menyimpan absensi: ${escapeHtml(err.message)}</p></div>`;
   }
   setTimeout(() => { resetKioskStandby(); kioskBusy = false; }, KIOSK_RESULT_DELAY_OK);
 }
@@ -1742,7 +1760,7 @@ $('#btnGenerateReport').addEventListener('click', () => {
       <table>
         <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
         <tbody>
-          ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">${emptyMsg}</td></tr>`}
+          ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):escapeHtml(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">${emptyMsg}</td></tr>`}
         </tbody>
       </table>`;
 
@@ -1750,12 +1768,12 @@ $('#btnGenerateReport').addEventListener('click', () => {
       <h2>Laporan Individu Siswa</h2>
       <div class="report-head-line"><span>Periode: ${periodeLabel()}</span><span>Dicetak: ${today}</span></div>
       <div class="report-summary">
-        <div class="report-summary-item"><span class="label">Nama</span><span class="value" style="font-size:14px">${s.Nama}</span></div>
-        <div class="report-summary-item"><span class="label">NIS</span><span class="value" style="font-size:14px">${s.NIS||'-'}</span></div>
-        <div class="report-summary-item"><span class="label">Kelas</span><span class="value" style="font-size:14px">${s.Kelas||'-'}</span></div>
-        <div class="report-summary-item"><span class="label">Jenis Kelamin</span><span class="value" style="font-size:14px">${s.JenisKelamin||'-'}</span></div>
-        <div class="report-summary-item"><span class="label">Orang Tua/Wali</span><span class="value" style="font-size:14px">${s.NamaOrtu||'-'}</span></div>
-        <div class="report-summary-item"><span class="label">No. HP Ortu</span><span class="value" style="font-size:14px">${s.NoHPOrtu||'-'}</span></div>
+        <div class="report-summary-item"><span class="label">Nama</span><span class="value" style="font-size:14px">${escapeHtml(s.Nama)}</span></div>
+        <div class="report-summary-item"><span class="label">NIS</span><span class="value" style="font-size:14px">${escapeHtml(s.NIS||'-')}</span></div>
+        <div class="report-summary-item"><span class="label">Kelas</span><span class="value" style="font-size:14px">${escapeHtml(s.Kelas||'-')}</span></div>
+        <div class="report-summary-item"><span class="label">Jenis Kelamin</span><span class="value" style="font-size:14px">${escapeHtml(s.JenisKelamin||'-')}</span></div>
+        <div class="report-summary-item"><span class="label">Orang Tua/Wali</span><span class="value" style="font-size:14px">${escapeHtml(s.NamaOrtu||'-')}</span></div>
+        <div class="report-summary-item"><span class="label">No. HP Ortu</span><span class="value" style="font-size:14px">${escapeHtml(s.NoHPOrtu||'-')}</span></div>
       </div>
       ${buildReportSummaryHtml('absensi', absensi)}
       ${section('Rekap Absensi', ['Tanggal','Status','Keterangan'], absensi, 'Tidak ada catatan absensi')}
@@ -1764,7 +1782,7 @@ $('#btnGenerateReport').addEventListener('click', () => {
       ${section('Rekap Konseling', ['Tanggal','Topik','HasilKonseling','TindakLanjut'], konseling, 'Tidak ada catatan konseling')}
       ${section('Rekap Kolaborasi (Panggilan Ortu / Home Visit)', ['Tanggal','Jenis','Tujuan','Hasil'], kolaborasi, 'Tidak ada catatan kolaborasi')}
       ${section('Rekap 7 Kebiasaan Anak Indonesia Hebat', ['Tanggal','BangunPagiPukul','IbadahSholat','OlahragaJenis','BelajarMapel','IstirahatPukul'], kebiasaan, 'Belum ada catatan kebiasaan harian')}
-      ${s.Catatan ? `<h3 style="margin-top:22px">Catatan Tambahan</h3><p>${s.Catatan}</p>` : ''}
+      ${s.Catatan ? `<h3 style="margin-top:22px">Catatan Tambahan</h3><p>${escapeHtml(s.Catatan)}</p>` : ''}
     `;
     $('#reportPreview').innerHTML = html;
     $('#reportPreviewCard').style.display = 'block';
@@ -1785,12 +1803,12 @@ $('#btnGenerateReport').addEventListener('click', () => {
 
   const html = `
     <h2>${REPORT_TITLES[type]}</h2>
-    <div class="report-head-line"><span>Kelas: ${kelas || 'Semua Kelas'} &nbsp;|&nbsp; Periode: ${periodeLabel()}</span><span>Dicetak: ${today}</span></div>
+    <div class="report-head-line"><span>Kelas: ${escapeHtml(kelas || 'Semua Kelas')} &nbsp;|&nbsp; Periode: ${periodeLabel()}</span><span>Dicetak: ${today}</span></div>
     ${buildReportSummaryHtml(type, rows)}
     <table>
       <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
       <tbody>
-        ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">Tidak ada data</td></tr>`}
+        ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):escapeHtml(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">Tidak ada data</td></tr>`}
       </tbody>
     </table>
     <p style="margin-top:24px;font-size:12px;color:#999">Total data: ${rows.length}</p>
@@ -1939,11 +1957,11 @@ function openSettings(){
   $('#modalBody').innerHTML = `
     <div class="field full" style="margin-bottom:16px">
       <label>URL Web App Google Apps Script</label>
-      <input type="url" id="settingsApiUrl" value="${API_URL}" placeholder="https://script.google.com/macros/s/xxxxx/exec" />
+      <input type="url" id="settingsApiUrl" value="${escapeHtml(API_URL)}" placeholder="https://script.google.com/macros/s/xxxxx/exec" />
     </div>
     <div class="field full" style="margin-bottom:16px">
       <label>Token / Kata Sandi Akses</label>
-      <input type="password" id="settingsApiToken" value="${API_TOKEN}" placeholder="Sesuai ACCESS_TOKEN di Script Properties" />
+      <input type="password" id="settingsApiToken" value="${escapeHtml(API_TOKEN)}" placeholder="Sesuai ACCESS_TOKEN di Script Properties" />
     </div>
     <div class="field full backup-box">
       <label>Backup Database</label>
