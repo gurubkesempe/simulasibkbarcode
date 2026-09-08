@@ -1398,6 +1398,8 @@ $('#modalBackdrop').addEventListener('click', e => { if (e.target.id==='modalBac
 let kioskScanner = null;
 let kioskBusy = false;
 let kioskHintTimer = null;
+let kioskFacingMode = 'environment'; // 'environment' = kamera belakang, 'user' = kamera depan
+let kioskSwitching = false;
 const KIOSK_RESULT_DELAY_OK = 3500;   // ms menampilkan hasil sebelum kembali standby
 const KIOSK_RESULT_DELAY_INFO = 3000;
 const KIOSK_RESULT_DELAY_ERR = 2200;
@@ -1423,59 +1425,71 @@ function resetKioskStandby(){
 }
 
 function startKioskCamera(){
-  if (typeof Html5Qrcode === 'undefined'){
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-triangle-exclamation"></i><p>Pustaka pemindai gagal dimuat. Periksa koneksi internet lalu buka kembali mode kamera ini. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
-    return;
-  }
-  // Kartu siswa sekarang pakai kode QR (lihat printBarcodeCard) — QR jauh lebih toleran
-  // terhadap sudut/jarak/resolusi kamera seadanya dibanding barcode batang (CODE128).
-  // Format 1D lama tetap disertakan supaya kartu barcode yang sudah lanjut dicetak sebelumnya masih terbaca.
-  const formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
-    Html5QrcodeSupportedFormats.QR_CODE,
-    Html5QrcodeSupportedFormats.CODE_128,
-    Html5QrcodeSupportedFormats.CODE_39,
-    Html5QrcodeSupportedFormats.CODE_93,
-    Html5QrcodeSupportedFormats.CODABAR,
-    Html5QrcodeSupportedFormats.EAN_13,
-    Html5QrcodeSupportedFormats.EAN_8,
-    Html5QrcodeSupportedFormats.UPC_A,
-    Html5QrcodeSupportedFormats.UPC_E,
-    Html5QrcodeSupportedFormats.ITF
-  ] : undefined;
-
-  kioskScanner = new Html5Qrcode('kioskReader', {
-    formatsToSupport: formats,
-    useBarCodeDetectorIfSupported: true, // pakai BarcodeDetector native browser kalau tersedia — lebih cepat & akurat
-    verbose: false
-  });
-
-  kioskScanner.start(
-    { facingMode: 'environment' },
-    {
-      fps: 10,
-      // qrbox persegi (bukan memanjang) — cocok untuk kode QR, dan otomatis menyesuaikan
-      // ke ukuran video supaya tidak error di kamera dengan resolusi kecil.
-      qrbox: (viewfinderWidth, viewfinderHeight) => {
-        const size = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
-        return { width: Math.max(size, 150), height: Math.max(size, 150) };
-      }
-    },
-    (decodedText) => handleKioskScan(decodedText),
-    () => { /* frame tanpa kode terdeteksi — abaikan, ini normal & terus-menerus terjadi */ }
-  ).catch(err => {
+  kioskStartPromise(kioskFacingMode).catch(err => {
     toast('Tidak bisa mengakses kamera: ' + err, 'error');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-video-slash"></i><p>Tidak bisa mengakses kamera. Pastikan browser diberi izin kamera, lalu coba lagi. Kamu tetap bisa absen lewat kolom ketik/pemindai USB di bawah.</p></div>`;
   });
 }
 
 function stopKioskCamera(){
+  kioskBusy = false;
+  clearTimeout(kioskHintTimer);
   if (kioskScanner){
     const s = kioskScanner;
     kioskScanner = null;
-    s.stop().then(() => s.clear()).catch(() => {});
+    return s.stop().then(() => s.clear()).catch(() => {});
   }
-  kioskBusy = false;
-  clearTimeout(kioskHintTimer);
+  return Promise.resolve();
+}
+
+/* Tombol "putar kamera" — gonta-ganti antara kamera belakang (environment, default,
+   dipakai buat scan kartu QR siswa) dan kamera depan (user), misalnya kalau HP-nya
+   cuma punya satu kamera yang gampang diakses, atau dipasang di dudukan terbalik. */
+async function switchKioskCamera(){
+  if (kioskSwitching) return;
+  kioskSwitching = true;
+  const btn = $('#kioskSwitchCamBtn');
+  if (btn) btn.disabled = true;
+  const previousMode = kioskFacingMode;
+  const nextMode = kioskFacingMode === 'environment' ? 'user' : 'environment';
+  try{
+    await stopKioskCamera();
+    kioskFacingMode = nextMode;
+    $('#kioskResult').innerHTML = `<div class="kiosk-standby"><i class="fa-solid fa-rotate"></i><p>Mengganti kamera...</p></div>`;
+    await kioskStartPromise(nextMode);
+    toast(nextMode === 'user' ? 'Kamera depan aktif.' : 'Kamera belakang aktif.', 'success');
+    resetKioskStandby();
+  }catch(err){
+    // Gagal (mis. HP/laptop cuma punya satu kamera) — kembalikan ke kamera semula.
+    kioskFacingMode = previousMode;
+    toast('Kamera lain tidak tersedia di perangkat ini.', 'error');
+    try{ await kioskStartPromise(previousMode); }catch(e){ /* biarkan, pesan error sudah ditampilkan startKioskCamera */ }
+    resetKioskStandby();
+  }finally{
+    kioskSwitching = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* Bungkus startKioskCamera jadi Promise supaya switchKioskCamera bisa menunggu
+   kamera baru benar-benar menyala (atau gagal) sebelum lanjut. */
+function kioskStartPromise(facingMode){
+  return new Promise((resolve, reject) => {
+    if (typeof Html5Qrcode === 'undefined'){ reject(new Error('Pustaka pemindai belum termuat')); return; }
+    const formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
+      Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.CODE_93, Html5QrcodeSupportedFormats.CODABAR, Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.ITF
+    ] : undefined;
+    kioskScanner = new Html5Qrcode('kioskReader', { formatsToSupport: formats, useBarCodeDetectorIfSupported: true, verbose: false });
+    kioskScanner.start(
+      { facingMode },
+      { fps: 10, qrbox: (vw, vh) => { const size = Math.floor(Math.min(vw, vh) * 0.7); return { width: Math.max(size, 150), height: Math.max(size, 150) }; } },
+      (decodedText) => handleKioskScan(decodedText),
+      () => {}
+    ).then(resolve).catch(reject);
+  });
 }
 
 /* Bunyi "beep" singkat sebagai konfirmasi tambahan saat absen berhasil —
@@ -1573,6 +1587,7 @@ async function handleKioskScan(code){
 }
 
 function openKiosk(){
+  kioskFacingMode = 'environment'; // selalu mulai dari kamera belakang, paling pas untuk scan kartu QR
   resetKioskStandby();
   $('#kioskOverlay').classList.add('open');
   startKioskCamera();
@@ -1583,6 +1598,7 @@ function closeKiosk(){
 }
 $('#btnKioskAbsensi').addEventListener('click', openKiosk);
 $('#kioskCloseBtn').addEventListener('click', closeKiosk);
+$('#kioskSwitchCamBtn').addEventListener('click', switchKioskCamera);
 
 /* Kolom ketik manual + alat pemindai barcode USB/Bluetooth (mode "keyboard wedge"):
    alat-alat ini bekerja seperti mengetik cepat lalu menekan Enter, jadi kolom ini
