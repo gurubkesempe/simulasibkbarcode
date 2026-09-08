@@ -1010,16 +1010,25 @@ document.addEventListener('change', async e => {
    Sebelumnya pakai barcode batang (CODE128) tapi seringkali sulit terbaca kamera HP/webcam
    karena butuh fokus & sudut yang presisi. QR code jauh lebih toleran terhadap sudut, jarak,
    dan resolusi kamera yang seadanya, jadi lebih andal untuk absensi lewat kamera. */
+function makeQrDataUrl(text, cellSize, margin){
+  if (typeof qrcode === 'undefined') return '';
+  try{
+    const qr = qrcode(0, 'M'); // 0 = deteksi ukuran otomatis, 'M' = koreksi kesalahan sedang
+    qr.addData(String(text));
+    qr.make();
+    return qr.createDataURL(cellSize || 5, margin == null ? 3 : margin);
+  }catch(e){ return ''; }
+}
+
 function refreshBarcodePreview(wrap){
   if (!wrap) return;
   const input = wrap.querySelector('.barcode-input');
   const img = wrap.querySelector('.barcode-preview-svg');
   if (!input || !img) return;
   const val = input.value.trim();
-  if (!val || typeof QRCode === 'undefined'){ img.src = ''; img.style.display='none'; return; }
-  QRCode.toDataURL(val, { margin: 1, width: 130 })
-    .then(url => { img.src = url; img.style.display='inline-block'; })
-    .catch(() => { img.src = ''; img.style.display='none'; });
+  const url = val ? makeQrDataUrl(val, 4, 2) : '';
+  if (url){ img.src = url; img.style.display = 'inline-block'; }
+  else { img.removeAttribute('src'); img.style.display = 'none'; }
 }
 document.addEventListener('input', e => {
   if (!e.target.classList.contains('barcode-input')) return;
@@ -1054,27 +1063,30 @@ function printBarcodeCard(code, nama, kelas, nis){
   if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
   const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   w.document.write(`<!DOCTYPE html><html><head><title>Kartu QR Siswa</title>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/2.0.4/qrcode.min.js"><\/script>
     <style>
       body{ font-family:Arial, sans-serif; text-align:center; padding:28px; }
       .card{ border:2px solid #2F6F63; border-radius:12px; padding:18px 22px; display:inline-block; min-width:220px; }
       h3{ margin:0 0 2px; font-size:18px; }
       p{ margin:0 0 12px; color:#555; font-size:13px; }
-      img{ display:block; margin:0 auto; }
+      img{ display:block; margin:0 auto; width:200px; height:200px; }
       .code-text{ margin-top:8px; font-size:12px; color:#555; letter-spacing:.5px; }
     </style></head><body>
     <div class="card">
       <h3>${safe(nama) || '-'}</h3>
       <p>${safe(kelas) || '-'}${nis ? ' &middot; NIS ' + safe(nis) : ''}</p>
-      <img id="qrImg" width="180" height="180" />
+      <img id="qrImg" />
       <div class="code-text">${safe(code)}</div>
     </div>
     <script>
       window.onload = function(){
-        QRCode.toDataURL(${JSON.stringify(code)}, { margin: 1, width: 220 }).then(function(url){
-          document.getElementById('qrImg').src = url;
-          setTimeout(function(){ window.print(); }, 300);
-        });
+        try{
+          var qr = qrcode(0, 'M');
+          qr.addData(${JSON.stringify(code)});
+          qr.make();
+          document.getElementById('qrImg').src = qr.createDataURL(8, 4);
+        }catch(e){}
+        setTimeout(function(){ window.print(); }, 300);
       };
     <\/script>
     </body></html>`);
@@ -1217,7 +1229,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     </div>`).join('');
 
   w.document.write(`<!DOCTYPE html><html><head><title>Cetak Kartu QR Siswa</title>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/2.0.4/qrcode.min.js"><\/script>
     <style>
       @page{ size:A4; margin:8mm; }
       *{ box-sizing:border-box; }
@@ -1252,14 +1264,16 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     <script>
       window.onload = function(){
         var data = ${JSON.stringify(students.map(s => (s.Barcode || '').toString()))};
-        Promise.all(data.map(function(code, i){
-          return QRCode.toDataURL(code, { margin: 1, width: 140 }).then(function(url){
+        data.forEach(function(code, i){
+          try{
+            var qr = qrcode(0, 'M');
+            qr.addData(code);
+            qr.make();
             var el = document.getElementById('bc-' + i);
-            if (el) el.src = url;
-          }).catch(function(){});
-        })).then(function(){
-          setTimeout(function(){ window.print(); }, 400);
+            if (el) el.src = qr.createDataURL(5, 2);
+          }catch(e){}
         });
+        setTimeout(function(){ window.print(); }, 400);
       };
     <\/script>
     </body></html>`);
@@ -1470,6 +1484,34 @@ function stopKioskCamera(){
   clearTimeout(kioskHintTimer);
 }
 
+/* Bunyi "beep" singkat sebagai konfirmasi tambahan saat absen berhasil —
+   dibuat langsung lewat Web Audio API, tidak perlu file suara eksternal. */
+function playKioskBeep(kind){
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'sine';
+    if (kind === 'error'){
+      osc.frequency.value = 220;
+      gain.gain.setValueAtTime(0.001, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+      osc.start(); osc.stop(ctx.currentTime + 0.35);
+    } else {
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.001, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22);
+      osc.start(); osc.stop(ctx.currentTime + 0.22);
+    }
+    osc.onended = () => ctx.close();
+  }catch(e){ /* browser tidak izinkan/dukung audio — abaikan, tidak fatal */ }
+}
+
 async function handleKioskScan(code){
   if (kioskBusy) return;
   kioskBusy = true;
@@ -1478,16 +1520,18 @@ async function handleKioskScan(code){
   const status = $('#kioskStatusSelect').value || 'Hadir';
 
   if (!s){
-    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Kode <b>${cleanCode}</b> tidak terdaftar sebagai barcode siswa manapun.</p></div>`;
+    playKioskBeep('error');
+    $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Kode <b>${cleanCode}</b> tidak terdaftar sebagai kode QR siswa manapun.</p></div>`;
     setTimeout(() => { resetKioskStandby(); kioskBusy = false; }, KIOSK_RESULT_DELAY_ERR);
     return;
   }
 
   const today = new Date().toISOString().slice(0,10);
   const already = STATE.absensi.find(a => String(a.SiswaID) === String(s.ID) && a.Tanggal === today);
-  const photoHtml = avatarHtmlFor(s, 96).replace('avatar-ring', 'avatar-ring kiosk-photo');
+  const photoHtml = avatarHtmlFor(s, 108).replace('avatar-ring', 'avatar-ring kiosk-photo');
 
   if (already){
+    playKioskBeep('error');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--warn">
         ${photoHtml}
         <div class="kiosk-name">${s.Nama}</div>
@@ -1505,12 +1549,13 @@ async function handleKioskScan(code){
       <div class="kiosk-msg"><i class="fa-solid fa-spinner fa-spin"></i> Menyimpan absensi...</div>
     </div>`;
   try{
-    const data = { Tanggal: today, SiswaID: s.ID, Nama: s.Nama, Kelas: s.Kelas, Status: status, Keterangan: 'Absen otomatis via kamera (barcode)' };
+    const data = { Tanggal: today, SiswaID: s.ID, Nama: s.Nama, Kelas: s.Kelas, Status: status, Keterangan: 'Absen otomatis via kamera (QR)' };
     const created = await adapter.create('absensi', data);
     STATE.absensi.push({ ...data, ...created });
     populateClassFilters();
     renderCurrentPage();
     renderDashboard();
+    playKioskBeep('ok');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--ok">
         ${photoHtml}
         <div class="kiosk-name">${s.Nama}</div>
@@ -1518,6 +1563,7 @@ async function handleKioskScan(code){
         <div class="kiosk-msg"><i class="fa-solid fa-circle-check"></i> Absen berhasil — ${status}</div>
       </div>`;
   }catch(err){
+    playKioskBeep('error');
     $('#kioskResult').innerHTML = `<div class="kiosk-card kiosk-card--error"><i class="fa-solid fa-circle-xmark"></i><p>Gagal menyimpan absensi: ${err.message}</p></div>`;
   }
   setTimeout(() => { resetKioskStandby(); kioskBusy = false; }, KIOSK_RESULT_DELAY_OK);
