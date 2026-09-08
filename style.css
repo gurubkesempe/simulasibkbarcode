@@ -344,10 +344,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .kiosk-topbar .icon-btn:hover{ background:rgba(255,255,255,.22); }
 
 .kiosk-body{
-  flex:1; display:flex; align-items:center; justify-content:center; gap:32px; padding:24px; flex-wrap:wrap; overflow-y:auto;
+  flex:1; display:flex; align-items:center; justify-content:center; padding:24px; overflow-y:auto;
 }
 .kiosk-camera-wrap{
-  position:relative; width:min(440px,92vw); aspect-ratio:1/1; background:#000; border-radius:var(--radius-lg);
+  position:relative; width:min(460px,94vw); aspect-ratio:1/1; background:#000; border-radius:var(--radius-lg);
   overflow:hidden; box-shadow:var(--shadow-lg); flex-shrink:0;
 }
 .kiosk-camera-wrap #kioskReader{ width:100%; height:100%; }
@@ -356,21 +356,36 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   position:absolute; inset:14%; border:3px solid var(--accent); border-radius:16px; pointer-events:none;
   box-shadow:0 0 0 999px rgba(0,0,0,.28);
 }
-.kiosk-result{
-  width:min(360px,92vw); min-height:220px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14);
-  border-radius:var(--radius-lg); display:flex; align-items:center; justify-content:center; padding:24px;
-}
-.kiosk-standby{ text-align:center; color:rgba(255,255,255,.75); }
-.kiosk-standby i{ font-size:40px; margin-bottom:14px; display:block; opacity:.7; }
-.kiosk-standby p{ font-size:14px; line-height:1.5; }
 
-.kiosk-card{ text-align:center; width:100%; }
+/* Hasil scan / status kamera ditampilkan LANGSUNG DI ATAS video kamera (bukan
+   kotak terpisah di samping) — supaya di layar HP yang sempit, notifikasi
+   "berhasil" selalu langsung terlihat di tengah tanpa perlu geser/scroll. */
+.kiosk-result{
+  position:absolute; inset:0; z-index:5; display:flex; align-items:flex-end; justify-content:center;
+  padding:16px; pointer-events:none;
+}
+.kiosk-result > *{ pointer-events:auto; }
+.kiosk-result:has(.kiosk-card){
+  align-items:center; background:rgba(15,30,25,.78); backdrop-filter:blur(3px);
+}
+
+.kiosk-standby{
+  text-align:center; color:#fff; width:100%; background:rgba(0,0,0,.55); backdrop-filter:blur(6px);
+  border-radius:16px; padding:14px 18px;
+}
+.kiosk-standby i{ font-size:26px; margin-bottom:8px; display:block; opacity:.85; }
+.kiosk-standby p{ font-size:13px; line-height:1.5; }
+
+.kiosk-card{
+  text-align:center; width:100%; max-width:320px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.16);
+  border-radius:var(--radius-lg); padding:22px 20px; box-shadow:var(--shadow-lg);
+}
 .kiosk-card i{ font-size:34px; margin-bottom:10px; display:block; }
 .kiosk-card p{ font-size:14px; line-height:1.5; color:rgba(255,255,255,.85); }
 .kiosk-card--error i{ color:var(--danger); }
 .kiosk-card--error{ color:rgba(255,255,255,.85); }
 .kiosk-photo{
-  width:108px; height:108px; margin:0 auto 14px; font-size:34px; border:3px solid rgba(255,255,255,.45);
+  width:100px; height:100px; margin:0 auto 12px; font-size:32px; border:3px solid rgba(255,255,255,.45);
   box-shadow:0 0 0 6px rgba(255,255,255,.08);
 }
 .kiosk-name{ font-family:var(--font-display); font-weight:800; font-size:19px; }
@@ -393,8 +408,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .kiosk-manual-bar .btn{ flex-shrink:0; }
 
 @media (max-width: 720px){
-  .kiosk-body{ flex-direction:column; gap:20px; padding:16px; }
-  .kiosk-camera-wrap{ width:min(360px,90vw); }
+  .kiosk-body{ padding:16px; }
+  .kiosk-camera-wrap{ width:min(420px,92vw); }
   .kiosk-manual-bar{ padding:12px 16px; }
   .kiosk-manual-bar > span{ display:none; }
 }
@@ -428,9 +443,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 
 /* ============ TOAST ============ */
 .toast{
-  position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--ink);
-  color:#fff; padding:12px 20px; border-radius:10px; font-size:13.5px; font-weight:600; opacity:0; pointer-events:none;
-  transition:all .25s ease; z-index:200; box-shadow:var(--shadow-lg); display:flex; align-items:center; gap:8px;
+  position:fixed; bottom:calc(24px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%) translateY(20px);
+  background:var(--ink); color:#fff; padding:12px 20px; border-radius:10px; font-size:13.5px; font-weight:600; opacity:0;
+  pointer-events:none; transition:all .25s ease; z-index:500; box-shadow:var(--shadow-lg); display:flex; align-items:center;
+  gap:8px; max-width:min(92vw,420px); width:max-content; text-align:center; word-break:break-word;
 }
 .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 .toast.error{ background:var(--danger); }
