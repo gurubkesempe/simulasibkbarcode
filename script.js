@@ -183,6 +183,20 @@ const RealAdapter = {
     if (!json.ok) throw new Error(json.error || 'Gagal menyimpan pengaturan');
     return json.data;
   },
+  /* Akun Guru Piket (1 akun bersama untuk piket.html). Disimpan di Script
+     Properties server — password TIDAK pernah dikirim balik ke browser. */
+  async getPiketAccount(){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'getPiketAccount', token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal memuat akun Guru Piket');
+    return json.data;
+  },
+  async savePiketAccount(data){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'savePiketAccount', data, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menyimpan akun Guru Piket');
+    return json.data;
+  },
   /* Kenaikan Kelas: ubah kolom Kelas untuk banyak siswa terpilih sekaligus
      ke satu Kelas Tujuan, dalam SATU permintaan (bukan update() satu-satu). */
   async promoteSiswa(ids, kelasTujuan){
@@ -279,6 +293,8 @@ const DemoAdapter = {
     }
     return this.getSettings();
   },
+  async getPiketAccount(){ return { username:'', nama:'', passwordSet:false, demo:true }; },
+  async savePiketAccount(){ throw new Error('Akun Guru Piket hanya tersedia saat tersambung ke server (bukan Mode Demo).'); },
   /* Padanan promoteSiswa di RealAdapter, murni di localStorage untuk mode demo. */
   async promoteSiswa(ids, kelasTujuan){
     const idSet = new Set((ids||[]).map(String));
@@ -3487,6 +3503,25 @@ function openSettings(){
       <button class="btn btn-primary" id="settingsProfileSaveBtn" type="button" style="margin-top:14px"><i class="fa-solid fa-check"></i> Simpan Profil Sekolah</button>
     </div>
 
+    <div class="field full backup-box" id="piketAccountBox">
+      <label>Akun Guru Piket (Absensi QR)</label>
+      <p class="muted" style="margin:2px 0 10px">Satu akun bersama untuk semua guru piket, dipakai login di halaman <b>piket.html</b>. Akun ini hanya bisa mencatat absen lewat scan QR — tidak bisa melihat data lain. Password disimpan aman di server (tidak tampil di Google Sheet).</p>
+      <div class="field full" style="margin-bottom:12px">
+        <label>Nama Tampilan</label>
+        <input type="text" id="piketNama" placeholder="Contoh: Guru Piket" autocomplete="off" />
+      </div>
+      <div class="field full" style="margin-bottom:12px">
+        <label>Username</label>
+        <input type="text" id="piketUsername" placeholder="Contoh: piket" autocomplete="off" />
+      </div>
+      <div class="field full" style="margin-bottom:4px">
+        <label>Password</label>
+        <input type="text" id="piketPassword" placeholder="Memuat..." autocomplete="new-password" />
+        <p class="muted" id="piketPasswordHint" style="margin-top:4px;font-size:11.5px">Minimal 6 karakter. Mengganti password membuat semua sesi piket yang sedang login harus login ulang.</p>
+      </div>
+      <button class="btn btn-primary" id="piketSaveBtn" type="button" style="margin-top:10px"><i class="fa-solid fa-check"></i> Simpan Akun Guru Piket</button>
+    </div>
+
     <div class="field full" style="margin-bottom:16px">
       <label>URL Web App Google Apps Script</label>
       <input type="url" id="settingsApiUrl" value="${escapeHtml(API_URL)}" placeholder="https://script.google.com/macros/s/xxxxx/exec" />
@@ -3557,6 +3592,45 @@ function openSettings(){
       toast('Profil sekolah disimpan ke Google Sheet.', 'success');
     }catch(err){
       toast('Gagal menyimpan profil sekolah: ' + err.message, 'error');
+    }finally{
+      btn.disabled = false; btn.innerHTML = originalLabel;
+    }
+  });
+
+  // ---- Akun Guru Piket ----
+  let piketPasswordAlreadySet = false;
+  (async () => {
+    try{
+      const acc = await adapter.getPiketAccount();
+      piketPasswordAlreadySet = !!acc.passwordSet;
+      $('#piketNama').value = acc.nama || '';
+      $('#piketUsername').value = acc.username || '';
+      $('#piketPassword').placeholder = piketPasswordAlreadySet ? 'Kosongkan jika tidak ingin mengubah password' : 'Isi password untuk akun piket';
+    }catch(err){
+      $('#piketPassword').placeholder = 'Isi password untuk akun piket';
+      toast('Akun Guru Piket belum bisa dimuat: ' + err.message + ' (pastikan Code.gs terbaru sudah di-deploy).', 'error');
+    }
+  })();
+  $('#piketSaveBtn').addEventListener('click', async () => {
+    const nama = $('#piketNama').value.trim();
+    const username = $('#piketUsername').value.trim();
+    const password = $('#piketPassword').value;
+    if (!username){ toast('Username Guru Piket wajib diisi.', 'error'); return; }
+    if (!piketPasswordAlreadySet && !password){ toast('Password wajib diisi untuk akun piket baru.', 'error'); return; }
+    if (password && password.length < 6){ toast('Password minimal 6 karakter.', 'error'); return; }
+    const btn = $('#piketSaveBtn');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+    try{
+      const data = { nama: nama || 'Guru Piket', username };
+      if (password) data.password = password;
+      const res = await adapter.savePiketAccount(data);
+      piketPasswordAlreadySet = !!res.passwordSet;
+      $('#piketPassword').value = '';
+      $('#piketPassword').placeholder = 'Kosongkan jika tidak ingin mengubah password';
+      toast('Akun Guru Piket disimpan. Login di halaman piket.html.', 'success');
+    }catch(err){
+      toast(err.message, 'error');
     }finally{
       btn.disabled = false; btn.innerHTML = originalLabel;
     }

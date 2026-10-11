@@ -15,7 +15,7 @@
    Setiap kali file ini di-deploy ulang, ganti CACHE_VERSION di bawah
    supaya service worker lama otomatis diganti & cache lama dibersihkan.
    ============================================================ */
-const CACHE_VERSION = 'bkdigital-v6';
+const CACHE_VERSION = 'bkdigital-v7';
 const APP_SHELL = [
   './',
   './index.html',
