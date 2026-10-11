@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="theme-color" content="#2F6F63" />
+<title>Absensi QR — Guru Piket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="piket.css">
+</head>
+<body>
+
+<!-- ============ LOGIN GURU PIKET ============ -->
+<section class="pk-login" id="loginView">
+  <form class="pk-login-card" id="loginForm" autocomplete="on">
+    <img class="pk-login-logo" src="icons/icon-192.png" alt="" />
+    <h1>Absensi QR</h1>
+    <p class="pk-login-sub">Masuk sebagai <b>Guru Piket</b></p>
+    <label for="loginUser">Username</label>
+    <input type="text" id="loginUser" name="username" autocomplete="username" autocapitalize="off" required />
+    <label for="loginPass">Password</label>
+    <input type="password" id="loginPass" name="password" autocomplete="current-password" required />
+    <div class="pk-error" id="loginError" role="alert"></div>
+    <button type="submit" class="pk-btn pk-btn-primary pk-btn-block" id="loginBtn"><i class="fa-solid fa-right-to-bracket"></i> Masuk</button>
+    <p class="pk-foot">Halaman ini hanya untuk mencatat absensi lewat kartu QR siswa.</p>
+  </form>
+</section>
+
+<!-- ============ HALAMAN SCAN ============ -->
+<section class="pk-app hidden" id="appView">
+  <header class="pk-top">
+    <div class="pk-brand">
+      <img id="schoolLogo" class="pk-brand-logo" src="icons/icon-192.png" alt="" />
+      <div>
+        <div class="pk-brand-title"><i class="fa-solid fa-qrcode"></i> Absensi QR — Guru Piket</div>
+        <div class="pk-brand-sub" id="schoolName">BK Digital</div>
+      </div>
+    </div>
+    <div class="pk-top-right">
+      <div class="pk-clock" id="clock"></div>
+      <button class="pk-icon-btn" id="logoutBtn" title="Keluar"><i class="fa-solid fa-right-from-bracket"></i></button>
+    </div>
+  </header>
+
+  <main class="pk-main">
+    <div class="pk-scan-col">
+      <div class="pk-controls">
+        <label class="pk-status-label">Status jika terdeteksi
+          <select id="statusSelect">
+            <option value="Hadir">Hadir</option>
+            <option value="Sakit">Sakit</option>
+            <option value="Izin">Izin</option>
+          </select>
+        </label>
+        <button class="pk-icon-btn" id="camToggleBtn" title="Matikan/nyalakan kamera"><i class="fa-solid fa-video"></i></button>
+        <button class="pk-icon-btn" id="camSwitchBtn" title="Ganti kamera depan/belakang"><i class="fa-solid fa-rotate"></i></button>
+      </div>
+
+      <div class="pk-camera">
+        <div id="reader"></div>
+        <div class="pk-frame"></div>
+        <div class="pk-result" id="result">
+          <div class="pk-standby"><i class="fa-solid fa-id-card"></i><p>Menyalakan kamera...</p></div>
+        </div>
+      </div>
+
+      <form class="pk-manual" id="manualForm">
+        <i class="fa-solid fa-keyboard"></i>
+        <input type="text" id="manualInput" placeholder="Ketik kode atau tembakkan pemindai USB/Bluetooth di sini, lalu Enter" autocomplete="off" />
+        <button type="submit" class="pk-btn pk-btn-primary"><i class="fa-solid fa-check"></i> Proses</button>
+      </form>
+    </div>
+
+    <aside class="pk-side">
+      <div class="pk-card">
+        <div class="pk-card-head">
+          <h2>Absensi Hari Ini</h2>
+          <span class="pk-date" id="todayDate"></span>
+        </div>
+        <div class="pk-stats">
+          <div class="pk-stat pk-stat--ok"><b id="cHadir">0</b><span>Hadir</span></div>
+          <div class="pk-stat pk-stat--warn"><b id="cSakit">0</b><span>Sakit</span></div>
+          <div class="pk-stat pk-stat--info"><b id="cIzin">0</b><span>Izin</span></div>
+          <div class="pk-stat"><b id="cTotal">0</b><span>Total</span></div>
+        </div>
+      </div>
+      <div class="pk-card">
+        <div class="pk-card-head">
+          <h2>Terbaru</h2>
+          <button class="pk-link" id="refreshBtn" title="Muat ulang"><i class="fa-solid fa-arrows-rotate"></i></button>
+        </div>
+        <ul class="pk-recent" id="recentList"><li class="pk-empty">Belum ada data.</li></ul>
+      </div>
+    </aside>
+  </main>
+</section>
+
+<script src="html5-qrcode.min.js"></script>
+<script src="piket.js"></script>
+</body>
+</html>

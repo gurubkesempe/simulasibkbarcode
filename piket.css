@@ -1,0 +1,119 @@
+/* ============================================================
+   BK DIGITAL — HALAMAN GURU PIKET (Absensi QR)
+   Token warna sama dengan style.css utama.
+   ============================================================ */
+:root{
+  --bg:#F5F7F8; --surface:#fff; --surface-2:#F0F3F4; --ink:#1B2430; --ink-soft:#5B6472; --border:#E3E7EA;
+  --primary:#2F6F63; --primary-dark:#234F46; --primary-light:#E4EFEC;
+  --accent:#E0932F; --accent-light:#FBF0DD; --danger:#D9614F; --danger-light:#FAE4E0;
+  --success:#3E9A63; --success-light:#E4F3E9; --info:#3B7DD8; --info-light:#E5EFFC;
+  --radius-sm:8px; --radius:14px; --radius-lg:20px;
+  --shadow:0 4px 16px rgba(27,36,48,.08); --shadow-lg:0 12px 32px rgba(27,36,48,.14);
+  --font-display:'Plus Jakarta Sans',system-ui,sans-serif; --font-body:'Inter',system-ui,sans-serif;
+}
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{ margin:0; font-family:var(--font-body); background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; }
+.hidden{ display:none !important; }
+button,input,select{ font-family:inherit; font-size:14px; }
+
+/* ---------- tombol ---------- */
+.pk-btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px; border:1px solid var(--border); background:#fff; color:var(--ink);
+  padding:10px 16px; border-radius:var(--radius-sm); font-weight:600; cursor:pointer; }
+.pk-btn-primary{ background:var(--primary); border-color:var(--primary); color:#fff; }
+.pk-btn-primary:hover{ background:var(--primary-dark); }
+.pk-btn:disabled{ opacity:.6; cursor:wait; }
+.pk-btn-block{ width:100%; }
+.pk-icon-btn{ width:40px; height:40px; border-radius:var(--radius-sm); border:1px solid var(--border); background:#fff; color:var(--ink); cursor:pointer; flex-shrink:0; }
+.pk-icon-btn:hover{ background:var(--surface-2); }
+.pk-link{ background:none; border:0; color:var(--primary); cursor:pointer; padding:4px 6px; font-size:15px; }
+
+/* ---------- login ---------- */
+.pk-login{ min-height:100%; display:flex; align-items:center; justify-content:center; padding:20px;
+  background:linear-gradient(160deg,var(--primary-dark),var(--primary)); }
+.pk-login-card{ width:100%; max-width:380px; background:#fff; border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); padding:28px 26px; text-align:center; }
+.pk-login-logo{ width:64px; height:64px; border-radius:16px; margin-bottom:8px; }
+.pk-login-card h1{ margin:0; font-family:var(--font-display); font-size:24px; }
+.pk-login-sub{ margin:4px 0 18px; color:var(--ink-soft); font-size:14px; }
+.pk-login-card label{ display:block; text-align:left; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin:12px 0 5px; }
+.pk-login-card input{ width:100%; padding:11px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:#fff; }
+.pk-login-card input:focus{ outline:2px solid var(--primary-light); border-color:var(--primary); }
+.pk-login-card .pk-btn{ margin-top:18px; padding:12px; }
+.pk-error{ min-height:18px; margin-top:10px; font-size:13px; color:var(--danger); text-align:left; }
+.pk-foot{ margin:14px 0 0; font-size:11.5px; color:var(--ink-soft); }
+
+/* ---------- app ---------- */
+.pk-app{ min-height:100%; display:flex; flex-direction:column; }
+.pk-top{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 20px; background:var(--primary-dark); color:#fff;
+  padding-top:calc(12px + env(safe-area-inset-top)); }
+.pk-brand{ display:flex; align-items:center; gap:12px; min-width:0; }
+.pk-brand-logo{ width:40px; height:40px; border-radius:10px; background:#fff; object-fit:contain; flex-shrink:0; }
+.pk-brand-title{ font-family:var(--font-display); font-weight:700; font-size:16px; display:flex; align-items:center; gap:8px; }
+.pk-brand-sub{ font-size:12.5px; color:rgba(255,255,255,.75); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pk-top-right{ display:flex; align-items:center; gap:12px; }
+.pk-clock{ font-family:var(--font-display); font-weight:700; font-size:20px; font-variant-numeric:tabular-nums; }
+.pk-top .pk-icon-btn{ background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.22); color:#fff; }
+.pk-top .pk-icon-btn:hover{ background:rgba(255,255,255,.24); }
+
+.pk-main{ flex:1; display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:20px; padding:20px; max-width:1100px; width:100%; margin:0 auto; align-items:start; }
+.pk-scan-col{ display:flex; flex-direction:column; gap:14px; align-items:center; }
+.pk-controls{ display:flex; align-items:center; gap:10px; width:min(520px,100%); }
+.pk-status-label{ flex:1; display:flex; align-items:center; gap:10px; font-size:13px; font-weight:600; color:var(--ink-soft); }
+.pk-status-label select{ flex:1; padding:9px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:#fff; color:var(--ink); }
+
+/* kamera */
+.pk-camera{ position:relative; width:min(520px,100%); aspect-ratio:1/1; background:#000; border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-lg); }
+.pk-camera #reader{ width:100%; height:100%; }
+.pk-camera #reader video{ width:100% !important; height:100% !important; object-fit:cover; }
+.pk-frame{ position:absolute; inset:14%; border:3px solid var(--accent); border-radius:16px; pointer-events:none; box-shadow:0 0 0 999px rgba(0,0,0,.28); }
+.pk-result{ position:absolute; inset:0; z-index:5; display:flex; align-items:flex-end; justify-content:center; padding:14px; pointer-events:none; }
+.pk-result:has(.pk-card-res){ align-items:center; background:rgba(15,30,25,.82); backdrop-filter:blur(3px); }
+.pk-standby{ text-align:center; color:#fff; width:100%; background:rgba(0,0,0,.55); backdrop-filter:blur(6px); border-radius:16px; padding:12px 16px; }
+.pk-standby i{ font-size:24px; display:block; margin-bottom:6px; opacity:.85; }
+.pk-standby p{ margin:0; font-size:13px; line-height:1.5; }
+.pk-card-res{ text-align:center; width:100%; max-width:330px; color:#fff; padding:22px 20px; border:1px solid rgba(255,255,255,.18); border-radius:var(--radius-lg); background:rgba(255,255,255,.07); }
+.pk-card-res > i{ font-size:42px; display:block; margin-bottom:10px; }
+.pk-card-res .pk-name{ font-family:var(--font-display); font-weight:800; font-size:21px; line-height:1.25; word-break:break-word; }
+.pk-card-res .pk-sub{ font-size:13.5px; color:rgba(255,255,255,.75); margin-top:3px; }
+.pk-card-res .pk-msg{ display:inline-block; margin-top:14px; padding:8px 16px; border-radius:999px; font-weight:700; font-size:14px; }
+.pk-card-res p{ margin:0; font-size:14px; line-height:1.5; color:rgba(255,255,255,.88); }
+.pk-card-res--ok > i{ color:#7BE0A3; }   .pk-card-res--ok .pk-msg{ background:var(--success-light); color:var(--success); }
+.pk-card-res--warn > i{ color:#F5C16B; } .pk-card-res--warn .pk-msg{ background:var(--accent-light); color:#A9690F; }
+.pk-card-res--err > i{ color:#FF9A8B; }
+.pk-card-res--pending .pk-msg{ background:rgba(255,255,255,.16); color:#fff; }
+
+.pk-manual{ display:flex; align-items:center; gap:10px; width:min(520px,100%); background:#fff; border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; }
+.pk-manual > i{ color:var(--ink-soft); }
+.pk-manual input{ flex:1; min-width:0; border:0; outline:0; background:transparent; padding:6px 2px; }
+
+/* panel samping */
+.pk-side{ display:flex; flex-direction:column; gap:16px; }
+.pk-card{ background:#fff; border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px; }
+.pk-card-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.pk-card-head h2{ margin:0; font-family:var(--font-display); font-size:15px; }
+.pk-date{ font-size:12px; color:var(--ink-soft); }
+.pk-stats{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.pk-stat{ background:var(--surface-2); border-radius:var(--radius-sm); padding:10px 6px; text-align:center; }
+.pk-stat b{ display:block; font-family:var(--font-display); font-size:22px; }
+.pk-stat span{ font-size:11.5px; color:var(--ink-soft); }
+.pk-stat--ok{ background:var(--success-light); } .pk-stat--ok b{ color:var(--success); }
+.pk-stat--warn{ background:var(--accent-light); } .pk-stat--warn b{ color:#A9690F; }
+.pk-stat--info{ background:var(--info-light); } .pk-stat--info b{ color:var(--info); }
+.pk-recent{ list-style:none; margin:0; padding:0; max-height:360px; overflow-y:auto; }
+.pk-recent li{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 2px; border-bottom:1px solid var(--border); font-size:13.5px; }
+.pk-recent li:last-child{ border-bottom:0; }
+.pk-recent .pk-who{ min-width:0; }
+.pk-recent .pk-who b{ display:block; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pk-recent .pk-who small{ color:var(--ink-soft); font-size:11.5px; }
+.pk-chip{ flex-shrink:0; font-size:11.5px; font-weight:700; padding:3px 10px; border-radius:999px; background:var(--surface-2); }
+.pk-chip--Hadir{ background:var(--success-light); color:var(--success); }
+.pk-chip--Sakit{ background:var(--accent-light); color:#A9690F; }
+.pk-chip--Izin{ background:var(--info-light); color:var(--info); }
+.pk-chip--Alpa{ background:var(--danger-light); color:var(--danger); }
+.pk-empty{ color:var(--ink-soft); justify-content:center !important; }
+
+@media (max-width:860px){
+  .pk-main{ grid-template-columns:1fr; padding:14px; }
+  .pk-clock{ font-size:17px; }
+  .pk-brand-title{ font-size:14px; }
+}

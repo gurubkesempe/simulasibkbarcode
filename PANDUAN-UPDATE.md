@@ -334,3 +334,28 @@ Lalu Deploy → Manage deployments → pensil → New version → Deploy. Kolom 
 - Guru Mapel: tidak punya akses (hanya menu Pelanggaran).
 
 **Catatan:** kamera di browser hanya jalan lewat HTTPS (GitHub Pages sudah HTTPS) atau localhost.
+
+---
+
+## Update: Halaman Guru Piket (`piket.html`)
+
+Halaman **terpisah** khusus Absensi QR, dibuka di `https://<situs-kamu>/piket.html` (mis. di tablet/HP di gerbang). Login memakai **1 akun Guru Piket bersama** — bukan akun Guru Mapel/Konselor.
+
+**Setup akun (sekali saja, di Apps Script)**
+1. Pasang `Code.gs` terbaru, lalu Deploy → New version.
+2. Project Settings → Script Properties → tambahkan:
+   - `PIKET_USERNAME` — contoh `piket`
+   - `PIKET_PASSWORD` — kata sandi yang dibagikan ke guru piket
+   - `PIKET_NAMA` — (opsional) nama tampilan, default "Guru Piket"
+3. Selesai. Untuk **mengganti password**, ubah `PIKET_PASSWORD` — semua sesi piket lama otomatis keluar.
+
+**Yang bisa & tidak bisa dilakukan akun piket**
+- Bisa: memindai kartu QR (kamera / ketik / pemindai USB-Bluetooth), memilih status Hadir/Sakit/Izin, melihat rekap & daftar terbaru absensi **hari ini**.
+- Tidak bisa: membaca daftar siswa, melihat/mengubah/menghapus data apa pun, masuk ke aplikasi utama. Server yang mencocokkan kode QR, menentukan tanggal & jam (zona waktu script, bukan jam perangkat), dan menolak absen ganda di hari yang sama.
+- Login piket kena proteksi brute-force (5x gagal → dikunci 15 menit + email peringatan ke Admin).
+
+**Catatan**
+- Siswa harus sudah punya kode QR (menu Data Siswa → *Cetak Kartu QR (Massal)*).
+- Kamera butuh HTTPS (GitHub Pages sudah) dan izin kamera di browser. Layar tablet dijaga tetap menyala selama halaman dibuka.
+- `piket.js` memuat `API_URL` sendiri — kalau suatu saat URL Web App diganti, ubah juga di `script.js` **dan** `piket.js`.
+- Perbaikan kecil: Mode Kamera di aplikasi utama kini memakai tanggal lokal (sebelumnya UTC, bisa salah hari sebelum jam 07.00 WIB).
