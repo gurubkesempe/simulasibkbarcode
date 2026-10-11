@@ -83,12 +83,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .setup-card h1{ font-size:26px; font-weight:800; }
 .setup-sub{ color:var(--ink-soft); margin-top:4px; font-size:14px; }
 .setup-label{ display:block; text-align:left; font-size:13px; font-weight:600; color:var(--ink-soft); margin:24px 0 6px; }
-.setup-card input[type=url]{
+.setup-card input[type=url], .setup-card input[type=password], .setup-card input[type=text]{
   width:100%; padding:12px 14px; border-radius:var(--radius-sm); border:1.5px solid var(--border);
   font-size:14px; font-family:var(--font-body); margin-bottom:16px;
 }
-.setup-card input[type=url]:focus{ border-color:var(--primary); outline:none; }
+.setup-card input[type=url]:focus, .setup-card input[type=password]:focus, .setup-card input[type=text]:focus{ border-color:var(--primary); outline:none; }
 .setup-note{ font-size:12px; color:var(--ink-faint); margin-top:16px; line-height:1.5; }
+.setup-switch-link{ display:inline-block; margin-top:18px; color:var(--primary); font-weight:600; font-size:12.5px; text-decoration:none; }
+.setup-switch-link:hover{ text-decoration:underline; }
+.guru-badge{
+  font-size:12px; font-weight:600; color:var(--primary); background:var(--accent-light);
+  padding:5px 12px; border-radius:999px; margin-left:12px; white-space:nowrap;
+}
 
 /* ============ BUTTONS ============ */
 .btn{
@@ -283,37 +289,249 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .checkbox-pill input{ width:15px; height:15px; accent-color:var(--primary); }
 .field--checkbox{ justify-content:flex-end; }
 
-/* ============ 7 KEBIASAAN HABIT CARDS ============ */
-.habit-card .habit-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px 16px; margin-top:4px; }
-.habit-item{ display:flex; align-items:flex-start; gap:9px; font-size:12.5px; }
-.habit-item i{ width:16px; margin-top:2px; color:var(--primary); flex-shrink:0; }
-.habit-label{ display:block; font-weight:700; color:var(--ink-soft); font-size:11px; text-transform:uppercase; letter-spacing:.02em; }
-.habit-value{ display:block; color:var(--ink); }
-.habit-note{ margin-top:12px; padding-top:12px; border-top:1px dashed var(--border); font-size:13px; color:var(--ink-soft); }
-.habit-note b{ color:var(--ink); }
-@media (max-width: 560px){ .habit-card .habit-grid{ grid-template-columns:1fr; } }
-
-/* Formulir cetak 7 Kebiasaan (mirip formulir kertas) */
-.hb-table{ width:100%; border-collapse:collapse; margin-top:14px; }
-.hb-table td{ border:1px solid #ccc; padding:8px 10px; font-size:12.5px; vertical-align:top; }
-.hb-table .hb-k{ font-weight:700; width:32%; background:#f7f7f7; }
-
 /* ============ ABSEN MASSAL ============ */
 .bulk-list-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin:14px 0 8px; flex-wrap:wrap; }
 .bulk-siswa-list{ display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px; margin-bottom:16px; }
 .bulk-item{ width:100%; justify-content:flex-start; border-radius:8px; }
+
+/* ============ TEMPLATE PELANGGARAN ============ */
+.mpl-item{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.mpl-info{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ============ JENIS PELANGGARAN PICKER (dropdown + opsi manual di form) ============ */
+.jenis-pelanggaran-picker{ display:flex; flex-direction:column; gap:8px; }
 .bulk-item .avatar-ring{ flex-shrink:0; }
 
-/* ============ FOTO SISWA (upload di form) ============ */
-.avatar-photo{ border-radius:50%; }
-.field-photo .photo-upload{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-.photo-preview{
-  width:72px; height:72px; border-radius:50%; background:var(--surface-2); border:1.5px solid var(--border);
-  display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; color:var(--ink-faint); font-size:26px;
+/* ============ BACKUP DATABASE (di modal Pengaturan) ============ */
+.backup-box{ padding:12px 14px; background:var(--surface-2); border-radius:var(--radius-sm); margin-bottom:16px; }
+
+/* ---- School profile (Dashboard header + Settings) ---- */
+.school-profile-bar{
+  display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:14px 18px; margin-bottom:18px; box-shadow:var(--shadow-sm);
 }
-.photo-preview img{ width:100%; height:100%; object-fit:cover; }
-.photo-actions{ display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
-.photo-hint{ flex-basis:100%; font-size:11.5px; margin-top:6px; }
+.school-profile-logo{
+  width:52px; height:52px; border-radius:12px; background:var(--primary-light); color:var(--primary);
+  display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; font-size:20px;
+}
+.school-profile-logo img{ width:100%; height:100%; object-fit:cover; }
+.school-profile-name{ font-weight:800; font-size:16px; color:var(--ink); font-family:var(--font-head,inherit); }
+.school-profile-year{ font-size:12.5px; color:var(--ink-soft); margin-top:2px; }
+
+.profile-box{ padding:14px 14px 4px; background:var(--surface-2); border-radius:var(--radius-sm); margin-bottom:16px; }
+.logo-upload-row{ display:flex; align-items:center; gap:12px; margin-top:4px; }
+.logo-preview{
+  width:56px; height:56px; border-radius:10px; background:var(--surface); border:1px dashed var(--border);
+  display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; color:var(--ink-soft);
+}
+.logo-preview img{ width:100%; height:100%; object-fit:cover; }
+.logo-upload-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+.bukti-foto-thumb{
+  display:block; width:96px; height:96px; object-fit:cover; border-radius:10px;
+  border:1px solid var(--border); margin-top:6px; cursor:zoom-in;
+}
+
+/* ============ TANDA TANGAN / PARAF (Signature Pad) ============ */
+.signature-pad-box{
+  position:relative; border:1.5px dashed var(--border); border-radius:var(--radius-sm);
+  background:#fff; overflow:hidden;
+}
+.signature-canvas{ display:block; width:100%; height:150px; touch-action:none; cursor:crosshair; }
+.signature-placeholder{
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  color:var(--ink-soft); font-size:12.5px; pointer-events:none; text-align:center; padding:0 12px;
+}
+.signature-actions{ display:flex; gap:8px; margin-top:8px; }
+.signature-thumb{
+  display:block; max-width:160px; max-height:64px; object-fit:contain;
+  border:1px solid var(--border); border-radius:6px; background:#fff; cursor:zoom-in; margin-top:4px;
+}
+
+/* ============ IMAGE LIGHTBOX ============ */
+.lightbox-backdrop{
+  position:fixed; inset:0; background:rgba(10,14,18,.92); z-index:500;
+  display:flex; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity .18s ease;
+}
+.lightbox-backdrop.open{ opacity:1; pointer-events:auto; }
+.lightbox-toolbar{
+  position:absolute; top:16px; right:16px; display:flex; gap:8px; z-index:2;
+}
+.lightbox-toolbar button{
+  width:38px; height:38px; border-radius:10px; border:none; background:rgba(255,255,255,.12); color:#fff;
+  font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s ease;
+}
+.lightbox-toolbar button:hover{ background:rgba(255,255,255,.24); }
+.lightbox-stage{
+  width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:auto; padding:60px 24px;
+}
+.lightbox-stage img{
+  max-width:90vw; max-height:80vh; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,.5);
+  transition:transform .15s ease; cursor:zoom-in; transform-origin:center center; user-select:none;
+}
+.lightbox-stage img.zoomed{ cursor:zoom-out; max-width:none; max-height:none; }
+
+/* ============ MODAL ============ */
+.modal-backdrop{
+  position:fixed; inset:0; background:rgba(20,26,34,.5); backdrop-filter:blur(2px);
+  display:flex; align-items:center; justify-content:center; z-index:100; opacity:0; pointer-events:none; transition:opacity .18s ease; padding:16px;
+}
+.modal-backdrop.open{ opacity:1; pointer-events:auto; }
+.modal{
+  background:var(--surface); border-radius:var(--radius-lg); width:100%; max-width:520px; max-height:88vh; overflow:hidden;
+  display:flex; flex-direction:column; box-shadow:var(--shadow-lg); transform:translateY(12px); transition:transform .18s ease;
+}
+.modal-backdrop.open .modal{ transform:translateY(0); }
+.modal-head{ display:flex; align-items:center; justify-content:space-between; padding:18px 22px; border-bottom:1px solid var(--border); }
+.modal-head h3{ font-size:16px; font-weight:700; }
+.modal-body{ padding:20px 22px; overflow-y:auto; overflow-x:hidden; }
+
+.form-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px; min-width:0; }
+.field{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.field.full{ grid-column:1 / -1; }
+.field label{ font-size:12.5px; font-weight:700; color:var(--ink-soft); }
+.field input, .field select, .field textarea{
+  padding:10px 12px; border-radius:var(--radius-sm); border:1.5px solid var(--border); font-size:13.5px;
+  font-family:var(--font-body); color:var(--ink); background:var(--surface);
+}
+.field textarea{ resize:vertical; min-height:70px; }
+.field input:focus, .field select:focus, .field textarea:focus{ outline:none; border-color:var(--primary); }
+.modal-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:6px; }
+
+/* ============ TOAST ============ */
+.toast{
+  position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--ink);
+  color:#fff; padding:12px 20px; border-radius:10px; font-size:13.5px; font-weight:600; opacity:0; pointer-events:none;
+  transition:all .25s ease; z-index:200; box-shadow:var(--shadow-lg); display:flex; align-items:center; gap:8px;
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+.toast.error{ background:var(--danger); }
+.toast.success{ background:var(--success); }
+
+/* ============ LOADING ============ */
+.loading-overlay{
+  position:fixed; inset:0; background:rgba(245,247,248,.75); display:none; align-items:center; justify-content:center; z-index:300;
+}
+.loading-overlay.show{ display:flex; }
+.spinner{ width:38px; height:38px; border-radius:50%; border:4px solid var(--border); border-top-color:var(--primary); animation:spin .7s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+/* ============ MOBILE BOTTOM NAV ============ */
+.bottom-nav{ display:none; }
+.more-sheet{
+  position:fixed; bottom:0; left:0; right:0; background:var(--primary-dark); border-radius:20px 20px 0 0;
+  padding:14px 14px calc(14px + env(safe-area-inset-bottom)); transform:translateY(110%); transition:transform .22s ease; z-index:60;
+}
+.more-sheet.open{ transform:translateY(0); }
+.more-sheet-inner{ display:flex; flex-direction:column; gap:2px; }
+.sheet-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; z-index:55; }
+.sheet-backdrop.open{ display:block; }
+
+/* ============ REPORT / PRINT ============ */
+.report-preview{ font-size:13px; }
+.report-preview h2{ margin-bottom:4px; }
+.report-preview table{ width:100%; border-collapse:collapse; margin-top:14px; }
+.report-preview th, .report-preview td{ border:1px solid #ccc; padding:6px 8px; text-align:left; font-size:12px; }
+.report-preview th{ background:#f0f0f0; }
+.report-head-line{ display:flex; justify-content:space-between; color:var(--ink-soft); font-size:12.5px; margin-top:2px; }
+.report-summary{ display:flex; flex-wrap:wrap; gap:8px; margin:14px 0; }
+.report-summary-item{ display:flex; flex-direction:column; gap:2px; border:1px solid #ddd; border-radius:8px; padding:8px 14px; background:#f7f8f6; }
+.report-summary-item .label{ font-size:10.5px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:.02em; }
+.report-summary-item .value{ font-size:17px; font-weight:700; color:var(--ink,#1a1a1a); }
+
+.report-homevisit-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
+.report-homevisit-card{ border:1px solid #ccc; border-radius:8px; padding:12px 14px; break-inside:avoid; }
+.report-homevisit-head{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:6px; font-size:13px; }
+.report-homevisit-date{ color:#777; font-size:11.5px; }
+.report-homevisit-card p{ margin:3px 0; font-size:12px; }
+.report-homevisit-photo{ display:block; width:100%; max-width:220px; margin-top:8px; border-radius:6px; border:1px solid #ddd; }
+@media print{
+  .report-homevisit-grid{ grid-template-columns:1fr 1fr; }
+  .report-homevisit-card{ page-break-inside:avoid; }
+}
+
+/* ============ GRID ABSENSI BULANAN (format lembar absensi sekolah) ============ */
+.ag-title{ text-align:center; letter-spacing:4px; margin-bottom:2px; }
+.ag-school{ text-align:center; margin:0 0 10px; font-size:12.5px; color:var(--ink-faint); }
+.ag-headline{ display:flex; justify-content:space-between; gap:12px; font-size:12.5px; margin-bottom:8px; }
+.report-preview--wide{ overflow-x:auto; }
+table.absensi-grid{
+  width:100%; border-collapse:collapse; table-layout:fixed; font-size:9px; margin-top:4px;
+}
+table.absensi-grid th, table.absensi-grid td{
+  border:1px solid #333; padding:1px 2px; text-align:center; vertical-align:middle;
+  background:transparent; color:#111; line-height:1.25;
+}
+table.absensi-grid thead th{ font-weight:700; font-size:8.5px; }
+table.absensi-grid .ag-no{ width:22px; }
+table.absensi-grid .ag-nama{ width:150px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+table.absensi-grid .ag-lp{ width:20px; }
+table.absensi-grid .ag-day{ width:15px; }
+table.absensi-grid .ag-sum{ width:18px; font-weight:700; }
+table.absensi-grid .ag-ketr{ width:48px; }
+table.absensi-grid tbody td.ag-day{ height:15px; }
+table.absensi-grid tbody td.ag-hadir{ font-weight:700; }
+
+.ag-foot{ display:flex; justify-content:space-between; gap:24px; margin-top:14px; font-size:12px; }
+.ag-foot-row{ margin:1px 0; }
+
+.report-signature{ margin-top:28px; text-align:left; font-size:12.5px; width:260px; margin-left:auto; }
+.report-signature p{ margin:1px 0; }
+.report-signature--inline{ margin-top:0; }
+.report-signature-space{ height:52px; }
+.report-signature-name{ font-weight:700; text-decoration:underline; }
+
+@media print{
+  table.absensi-grid{ font-size:8px; }
+  table.absensi-grid tbody tr{ page-break-inside:avoid; }
+  .ag-foot{ page-break-inside:avoid; }
+  .report-signature{ page-break-inside:avoid; }
+}
+
+@media print{
+  body *{ visibility:hidden; }
+  #reportPreview, #reportPreview *{ visibility:visible; }
+  #reportPreview{ position:absolute; top:0; left:0; width:100%; }
+}
+
+/* ============ RESPONSIVE ============ */
+@media (max-width: 1080px){
+  .stat-grid{ grid-template-columns:repeat(2,1fr); }
+  .grid-2{ grid-template-columns:1fr; }
+}
+
+@media (max-width: 860px){
+  .sidebar{ display:none; }
+  .hamburger{ display:flex; }
+  .content{ padding:16px 14px 96px; }
+  .topbar{ padding:14px 16px; }
+  .search-box{ width:150px; }
+  .bottom-nav{
+    display:flex; position:fixed; bottom:0; left:0; right:0; background:var(--surface); border-top:1px solid var(--border);
+    padding:8px 4px calc(6px + env(safe-area-inset-bottom)); justify-content:space-around; z-index:50;
+    box-shadow:0 -2px 12px rgba(0,0,0,.05);
+  }
+  .bn-item{ display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10.5px; color:var(--ink-faint); font-weight:600; padding:4px 6px; border-radius:10px; }
+  .bn-item i{ font-size:16px; }
+  .bn-item.active{ color:var(--primary); }
+  .form-grid{ grid-template-columns:1fr; }
+  .card-list{ grid-template-columns:1fr; }
+}
+
+@media (max-width: 480px){
+  .search-box{ display:none; }
+  .stat-grid{ grid-template-columns:1fr 1fr; gap:10px; }
+  .stat-card{ padding:14px; flex-direction:column; align-items:flex-start; gap:8px; }
+}
+
+/* ---------- PWA: splash screen & logo sekolah ---------- */
+.app-splash{position:fixed;inset:0;z-index:99999;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;transition:opacity .4s ease}
+.app-splash.out{opacity:0;pointer-events:none}
+.app-splash img{width:132px;height:132px;object-fit:contain}
+.app-splash h2{margin:0;font-family:'Plus Jakarta Sans',sans-serif;font-size:20px;color:#1B2430;text-align:center;padding:0 24px}
+.login-brand{display:flex;flex-direction:column;align-items:center;gap:6px;margin-bottom:10px}
+.login-brand img{width:72px;height:72px;object-fit:contain}
+.login-brand span{font-weight:700;font-size:14px;color:var(--ink-soft);text-align:center}
+.pwa-install-btn{margin-top:10px}
 
 /* ============ BARCODE SISWA (generate + preview + cetak di form) ============ */
 .field-barcode .barcode-row{ display:flex; gap:8px; }
@@ -395,8 +613,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .kiosk-card--ok .kiosk-msg{ background:var(--success-light); color:var(--success); }
 .kiosk-card--warn .kiosk-msg{ background:var(--accent-light); color:var(--accent); }
 .kiosk-card--pending .kiosk-msg{ background:rgba(255,255,255,.15); color:#fff; }
-.btn-wa{ margin-top:14px; background:#25D366; color:#fff; }
-.btn-wa:hover{ background:#1DA851; }
 
 .kiosk-manual-bar{
   display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:14px 22px; background:rgba(0,0,0,.22);
@@ -417,110 +633,4 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .kiosk-manual-bar > span{ display:none; }
 }
 
-/* ============ BACKUP DATABASE (di modal Pengaturan) ============ */
-.backup-box{ padding:12px 14px; background:var(--surface-2); border-radius:var(--radius-sm); margin-bottom:16px; }
-
-/* ============ MODAL ============ */
-.modal-backdrop{
-  position:fixed; inset:0; background:rgba(20,26,34,.5); backdrop-filter:blur(2px);
-  display:flex; align-items:center; justify-content:center; z-index:100; opacity:0; pointer-events:none; transition:opacity .18s ease; padding:16px;
-}
-.modal-backdrop.open{ opacity:1; pointer-events:auto; }
-.modal{
-  background:var(--surface); border-radius:var(--radius-lg); width:100%; max-width:520px; max-height:88vh; overflow:hidden;
-  display:flex; flex-direction:column; box-shadow:var(--shadow-lg); transform:translateY(12px); transition:transform .18s ease;
-}
-.modal-backdrop.open .modal{ transform:translateY(0); }
-.modal-head{ display:flex; align-items:center; justify-content:space-between; padding:18px 22px; border-bottom:1px solid var(--border); }
-.modal-head h3{ font-size:16px; font-weight:700; }
-.modal-body{ padding:20px 22px; overflow-y:auto; overflow-x:hidden; }
-
-.form-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px; min-width:0; }
-.field{ display:flex; flex-direction:column; gap:6px; min-width:0; }
-.field.full{ grid-column:1 / -1; }
-.field label{ font-size:12.5px; font-weight:700; color:var(--ink-soft); }
-.field input, .field select, .field textarea{
-  padding:10px 12px; border-radius:var(--radius-sm); border:1.5px solid var(--border); font-size:13.5px;
-  font-family:var(--font-body); color:var(--ink); background:var(--surface);
-}
-.field textarea{ resize:vertical; min-height:70px; }
-.field input:focus, .field select:focus, .field textarea:focus{ outline:none; border-color:var(--primary); }
-.modal-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:6px; }
-
-/* ============ TOAST ============ */
-.toast{
-  position:fixed; bottom:calc(24px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%) translateY(20px);
-  background:var(--ink); color:#fff; padding:12px 20px; border-radius:10px; font-size:13.5px; font-weight:600; opacity:0;
-  pointer-events:none; transition:all .25s ease; z-index:500; box-shadow:var(--shadow-lg); display:flex; align-items:center;
-  gap:8px; max-width:min(92vw,420px); width:max-content; text-align:center; word-break:break-word;
-}
-.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
-.toast.error{ background:var(--danger); }
-.toast.success{ background:var(--success); }
-
-/* ============ LOADING ============ */
-.loading-overlay{
-  position:fixed; inset:0; background:rgba(245,247,248,.75); display:none; align-items:center; justify-content:center; z-index:300;
-}
-.loading-overlay.show{ display:flex; }
-.spinner{ width:38px; height:38px; border-radius:50%; border:4px solid var(--border); border-top-color:var(--primary); animation:spin .7s linear infinite; }
-@keyframes spin{ to{ transform:rotate(360deg); } }
-
-/* ============ MOBILE BOTTOM NAV ============ */
-.bottom-nav{ display:none; }
-.more-sheet{
-  position:fixed; bottom:0; left:0; right:0; background:var(--primary-dark); border-radius:20px 20px 0 0;
-  padding:14px 14px calc(14px + env(safe-area-inset-bottom)); transform:translateY(110%); transition:transform .22s ease; z-index:60;
-}
-.more-sheet.open{ transform:translateY(0); }
-.more-sheet-inner{ display:flex; flex-direction:column; gap:2px; }
-.sheet-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; z-index:55; }
-.sheet-backdrop.open{ display:block; }
-
-/* ============ REPORT / PRINT ============ */
-.report-preview{ font-size:13px; }
-.report-preview h2{ margin-bottom:4px; }
-.report-preview table{ width:100%; border-collapse:collapse; margin-top:14px; }
-.report-preview th, .report-preview td{ border:1px solid #ccc; padding:6px 8px; text-align:left; font-size:12px; }
-.report-preview th{ background:#f0f0f0; }
-.report-head-line{ display:flex; justify-content:space-between; color:var(--ink-soft); font-size:12.5px; margin-top:2px; }
-.report-summary{ display:flex; flex-wrap:wrap; gap:8px; margin:14px 0; }
-.report-summary-item{ display:flex; flex-direction:column; gap:2px; border:1px solid #ddd; border-radius:8px; padding:8px 14px; background:#f7f8f6; }
-.report-summary-item .label{ font-size:10.5px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:.02em; }
-.report-summary-item .value{ font-size:17px; font-weight:700; color:var(--ink,#1a1a1a); }
-
-@media print{
-  body *{ visibility:hidden; }
-  #reportPreview, #reportPreview *{ visibility:visible; }
-  #reportPreview{ position:absolute; top:0; left:0; width:100%; }
-}
-
-/* ============ RESPONSIVE ============ */
-@media (max-width: 1080px){
-  .stat-grid{ grid-template-columns:repeat(2,1fr); }
-  .grid-2{ grid-template-columns:1fr; }
-}
-
-@media (max-width: 860px){
-  .sidebar{ display:none; }
-  .hamburger{ display:flex; }
-  .content{ padding:16px 14px 96px; }
-  .topbar{ padding:14px 16px; }
-  .search-box{ width:150px; }
-  .bottom-nav{
-    display:flex; position:fixed; bottom:0; left:0; right:0; background:var(--surface); border-top:1px solid var(--border);
-    padding:8px 4px calc(6px + env(safe-area-inset-bottom)); justify-content:space-around; z-index:50;
-    box-shadow:0 -2px 12px rgba(0,0,0,.05);
-  }
-  .bn-item{ display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10.5px; color:var(--ink-faint); font-weight:600; padding:4px 6px; border-radius:10px; }
-  .bn-item i{ font-size:16px; }
-  .bn-item.active{ color:var(--primary); }
-  .form-grid{ grid-template-columns:1fr; }
-  .card-list{ grid-template-columns:1fr; }
-}
-
-@media (max-width: 480px){
-  .search-box{ display:none; }
-  .stat-grid{ grid-template-columns:1fr 1fr; gap:10px; }
-  .stat-card{ padding:14px; flex-direction:column; align-items:flex-start; gap:8px; }
-}
+.kiosk-photo{ border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; }

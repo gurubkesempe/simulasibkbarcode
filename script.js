@@ -18,19 +18,120 @@ function escapeHtml(value){
     .replace(/'/g, '&#39;');
 }
 
-const TYPES = ['siswa','absensi','pelanggaran','konseling','kolaborasi','kebiasaan'];
-const STATE = { siswa:[], absensi:[], pelanggaran:[], konseling:[], kolaborasi:[], kebiasaan:[] };
-let API_URL = localStorage.getItem('bk_api_url') || '';
+const TYPES = ['siswa','absensi','pelanggaran','konseling','kolaborasi'];
+const STATE = { siswa:[], absensi:[], pelanggaran:[], konseling:[], kolaborasi:[], masterPelanggaran:[], guru:[], konselor:[], siswaLulus:[] };
+
+/* URL Web App bawaan — diisi SEKALI oleh Admin BK saat pertama kali men-deploy
+   situs ini (lihat PANDUAN-UPDATE.md), supaya guru mapel tidak perlu tahu atau
+   menempel URL Apps Script sama sekali. Kalau dikosongkan, layar Admin BK tetap
+   bisa mengisi URL secara manual seperti sebelumnya (mode lama tidak rusak). */
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzy7zvyVxqgdTyYVyaHvs4I0E1h7YldvVKDDAJFRhfeBKcR8-GUAbFt2KWxfrakZCz2/exec';
+
+/* URL Web App yang pernah tersimpan di browser (localStorage) dulu SELALU menang atas
+   DEFAULT_API_URL, jadi setelah URL di file ini diganti, browser yang sudah pernah login
+   tetap memanggil server LAMA (akibatnya login gagal walau kode sudah diperbarui).
+   Sekarang URL & sesi lama dibuang otomatis kalau DEFAULT_API_URL berubah dari yang
+   terakhir dipakai browser ini. Pengguna cukup login ulang satu kali. */
+(function reconcileApiUrl(){
+  if (!DEFAULT_API_URL) return;
+  try{
+    if (localStorage.getItem('bk_api_url_snapshot') !== DEFAULT_API_URL){
+      ['bk_api_url','bk_api_token','bk_role','bk_guru_nama','bk_guru_kelas','bk_konselor_nama','bk_konselor_kelas']
+        .forEach(k => localStorage.removeItem(k));
+      localStorage.setItem('bk_api_url_snapshot', DEFAULT_API_URL);
+    }
+  }catch(e){}
+})();
+
+let API_URL = localStorage.getItem('bk_api_url') || DEFAULT_API_URL;
 let API_TOKEN = localStorage.getItem('bk_api_token') || '';
+/* Peran yang sedang login: 'admin' (Guru BK utama, akses penuh), 'guru'
+   (Guru Mapel, dibatasi ke menu Pelanggaran & kelasnya sendiri saja), atau
+   'konselor' (Guru BK per-kelas, dibatasi ke menu Konseling & kelasnya
+   sendiri saja — supaya tiap Guru BK cuma melihat/mencatat konseling murid
+   asuhnya, bukan murid Guru BK lain). */
+let USER_ROLE = localStorage.getItem('bk_role') || 'admin';
+let GURU_NAMA = localStorage.getItem('bk_guru_nama') || '';
+let GURU_KELAS = JSON.parse(localStorage.getItem('bk_guru_kelas') || '[]');
+let KONSELOR_NAMA = localStorage.getItem('bk_konselor_nama') || '';
+let KONSELOR_KELAS = JSON.parse(localStorage.getItem('bk_konselor_kelas') || '[]');
 let currentPage = 'dashboard';
 let charts = {};
 
+/* ---------------- PROFIL SEKOLAH ----------------
+   Disimpan di localStorage saja (murni tampilan), tidak dikirim ke Google Sheet,
+   supaya tidak perlu mengubah struktur backend. Logo disimpan sebagai base64
+   data URL agar bisa langsung ditampilkan tanpa perlu hosting file terpisah. */
+let SCHOOL_NAME = localStorage.getItem('bk_school_name') || '';
+let SCHOOL_YEAR = localStorage.getItem('bk_school_year') || '';
+let SCHOOL_LOGO = localStorage.getItem('bk_school_logo') || '';
+/* Dipakai untuk blok tanda tangan di kaki laporan cetak (mis. "Sragi, 15 September 2026 /
+   Guru BK / SURYA IHZA MAHISTA, S.Pd / NIP. -"), mengikuti format lembar absensi manual
+   sekolah. Ikut tersimpan di sheet "Pengaturan" seperti profil sekolah lainnya. */
+let SCHOOL_CITY = localStorage.getItem('bk_school_city') || '';
+let SCHOOL_BK_NAME = localStorage.getItem('bk_school_bk_name') || '';
+let SCHOOL_BK_NIP = localStorage.getItem('bk_school_bk_nip') || '';
+
+function renderSchoolProfile(){
+  const bar = $('#schoolProfileBar');
+  if (!bar) return;
+  const hasAny = SCHOOL_NAME || SCHOOL_YEAR || SCHOOL_LOGO;
+  bar.style.display = hasAny ? 'flex' : 'none';
+  $('#schoolProfileName').textContent = SCHOOL_NAME || 'Nama Sekolah';
+  $('#schoolProfileYear').textContent = SCHOOL_YEAR ? `Tahun Pelajaran ${SCHOOL_YEAR}` : 'Tahun Pelajaran belum diatur';
+  const img = $('#schoolProfileLogo');
+  const icon = $('#schoolProfileLogoIcon');
+  if (SCHOOL_LOGO){
+    img.src = SCHOOL_LOGO; img.style.display = 'block'; icon.style.display = 'none';
+  } else {
+    img.style.display = 'none'; icon.style.display = 'block';
+  }
+  document.title = SCHOOL_NAME ? `BK Digital — ${SCHOOL_NAME}` : 'BK Digital — Sistem Bimbingan Konseling';
+  if (window.updatePwaIdentity) window.updatePwaIdentity(); // ikon/manifest/splash mengikuti logo sekolah
+}
+
 /* ---------------- ADAPTER: real Apps Script vs offline demo ---------------- */
+/* Backend versi lama menolak aksi login dengan pesan "Token akses salah atau kosong".
+   Pesan itu tidak ada di Code.gs terbaru, jadi kalau muncul berarti server yang
+   dipanggil belum memakai Code.gs terbaru / belum di-deploy ulang. */
+function explainLoginError(msg){
+  if (/token akses salah|periksa pengaturan koneksi/i.test(String(msg || ''))){
+    return 'Server (Google Apps Script) masih memakai kode lama. Admin: tempel Code.gs terbaru, lalu Deploy > Manage deployments > New version.';
+  }
+  return msg || 'Gagal login';
+}
+
 const RealAdapter = {
+  /* Login Guru Mapel: hanya kirim username & password (tidak pernah URL/token
+     master), backend membalas sessionToken terbatas yang lalu dipakai sebagai
+     API_TOKEN untuk request-request berikutnya. */
+  async loginGuru(username, password){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'loginGuru', username, password }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(explainLoginError(json.error));
+    return json.data;
+  },
+  /* Login Konselor (Guru BK per-kelas): sama alurnya dengan loginGuru, hanya
+     beda action & sheet yang dibaca server (lihat Code.gs: loginKonselor). */
+  async loginKonselor(username, password){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'loginKonselor', username, password }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(explainLoginError(json.error));
+    return json.data;
+  },
   async getAll(type){
     // Token dikirim lewat body POST (bukan query string URL) supaya tidak
     // tersimpan di riwayat browser / log server.
     const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'getAll', type, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal mengambil data');
+    return json.data;
+  },
+  /* Ambil semua jenis data (Siswa, Absensi, dst) dalam SATU kali permintaan ke server,
+     jauh lebih cepat dibanding 6 permintaan terpisah karena Apps Script hanya perlu
+     "bangun" satu kali untuk melayani semuanya sekaligus. */
+  async getAllBatch(){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'getAllBatch', token: API_TOKEN }) });
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Gagal mengambil data');
     return json.data;
@@ -58,6 +159,45 @@ const RealAdapter = {
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Gagal mengimpor data');
     return json.data;
+  },
+  /* Simpan banyak baris sekaligus dalam SATU permintaan (dipakai Absen Massal) —
+     jauh lebih cepat dibanding memanggil create() satu-satu per siswa. */
+  async bulkInsert(type, rows){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'bulkInsert', type, rows, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menyimpan data massal');
+    return json.data;
+  },
+  /* Profil Sekolah & pengaturan lain disimpan sebagai key-value di sheet
+     "Pengaturan" — supaya ikut tersimpan di Google Sheet dan otomatis muncul
+     lagi di perangkat/browser lain, bukan cuma di localStorage. */
+  async getSettings(){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'getSettings', token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal memuat pengaturan');
+    return json.data;
+  },
+  async saveSettings(data){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'saveSettings', data, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menyimpan pengaturan');
+    return json.data;
+  },
+  /* Kenaikan Kelas: ubah kolom Kelas untuk banyak siswa terpilih sekaligus
+     ke satu Kelas Tujuan, dalam SATU permintaan (bukan update() satu-satu). */
+  async promoteSiswa(ids, kelasTujuan){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'promoteSiswa', ids, kelasTujuan, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal melakukan kenaikan kelas');
+    return json.data;
+  },
+  /* Kelulusan: pindahkan banyak siswa terpilih sekaligus dari Data Siswa ke arsip
+     "Siswa Lulus" (tampil di menu Laporan). */
+  async lulusSiswa(ids, tahunLulus){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'lulusSiswa', ids, tahunLulus, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal melakukan kelulusan siswa');
+    return json.data;
   }
 };
 
@@ -66,6 +206,17 @@ const DemoAdapter = {
   read(type){ return JSON.parse(localStorage.getItem(this.key(type)) || '[]'); },
   write(type, arr){ localStorage.setItem(this.key(type), JSON.stringify(arr)); },
   async getAll(type){ return this.read(type); },
+  /* Padanan getAllBatch di RealAdapter, supaya kode loadAll() bisa sama untuk kedua mode. */
+  async getAllBatch(){
+    const out = {};
+    TYPES.forEach(t => out[t] = this.read(t));
+    out.masterPelanggaran = this.read('masterPelanggaran');
+    out.guru = this.read('guru');
+    out.konselor = this.read('konselor');
+    out.siswaLulus = this.read('siswaLulus');
+    out.pengaturan = await this.getSettings();
+    return out;
+  },
   async create(type, data){
     const arr = this.read(type);
     data.ID = data.ID || (type.substring(0,3).toUpperCase() + '-' + Date.now().toString(36));
@@ -96,14 +247,71 @@ const DemoAdapter = {
     this.write(type, arr);
     return { added, skipped, skippedKeys };
   },
+  /* Padanan bulkInsert di RealAdapter — simpan banyak baris sekaligus. */
+  async bulkInsert(type, rows){
+    const arr = this.read(type);
+    const inserted = rows.map((r,i) => ({ ...r, ID: r.ID || (type.substring(0,3).toUpperCase() + '-' + Date.now().toString(36) + '-' + i) }));
+    inserted.forEach(row => arr.push(row));
+    this.write(type, arr);
+    return { inserted: inserted.length, rows: inserted };
+  },
+  /* Padanan getSettings/saveSettings di RealAdapter, tapi murni di localStorage
+     karena mode demo memang tidak punya Google Sheet sungguhan. */
+  async getSettings(){
+    return {
+      NamaSekolah: localStorage.getItem('bk_school_name') || '',
+      TahunPelajaran: localStorage.getItem('bk_school_year') || '',
+      LogoSekolah: localStorage.getItem('bk_school_logo') || '',
+      KotaSekolah: localStorage.getItem('bk_school_city') || '',
+      NamaGuruBK: localStorage.getItem('bk_school_bk_name') || '',
+      NipGuruBK: localStorage.getItem('bk_school_bk_nip') || ''
+    };
+  },
+  async saveSettings(data){
+    if (data.NamaSekolah !== undefined) localStorage.setItem('bk_school_name', data.NamaSekolah);
+    if (data.TahunPelajaran !== undefined) localStorage.setItem('bk_school_year', data.TahunPelajaran);
+    if (data.KotaSekolah !== undefined) localStorage.setItem('bk_school_city', data.KotaSekolah);
+    if (data.NamaGuruBK !== undefined) localStorage.setItem('bk_school_bk_name', data.NamaGuruBK);
+    if (data.NipGuruBK !== undefined) localStorage.setItem('bk_school_bk_nip', data.NipGuruBK);
+    if (data.LogoSekolah !== undefined){
+      if (data.LogoSekolah) localStorage.setItem('bk_school_logo', data.LogoSekolah);
+      else localStorage.removeItem('bk_school_logo');
+    }
+    return this.getSettings();
+  },
+  /* Padanan promoteSiswa di RealAdapter, murni di localStorage untuk mode demo. */
+  async promoteSiswa(ids, kelasTujuan){
+    const idSet = new Set((ids||[]).map(String));
+    const arr = this.read('siswa');
+    let updated = 0;
+    arr.forEach(s => { if (idSet.has(String(s.ID))){ s.Kelas = kelasTujuan; updated++; } });
+    this.write('siswa', arr);
+    return { updated, kelasTujuan };
+  },
+  /* Padanan lulusSiswa di RealAdapter, murni di localStorage untuk mode demo. */
+  async lulusSiswa(ids, tahunLulus){
+    const idSet = new Set((ids||[]).map(String));
+    const before = this.read('siswa');
+    const after = before.filter(s => !idSet.has(String(s.ID)));
+    const tgl = new Date().toISOString().slice(0,10);
+    const arsip = this.read('siswaLulus');
+    before.filter(s => idSet.has(String(s.ID))).forEach((s, i) => {
+      arsip.push({ ID:'LUL-' + Date.now().toString(36).toUpperCase() + '-' + i, SiswaID:s.ID, NIS:s.NIS, Nama:s.Nama, Kelas:s.Kelas,
+        JenisKelamin:s.JenisKelamin, TempatTglLahir:s.TempatTglLahir, Alamat:s.Alamat, NamaOrtu:s.NamaOrtu, NoHPOrtu:s.NoHPOrtu,
+        Catatan:s.Catatan, TahunLulus:tahunLulus || '', TanggalLulus:tgl });
+    });
+    this.write('siswa', after);
+    this.write('siswaLulus', arsip);
+    return { deleted: before.length - after.length, archived: before.length - after.length };
+  },
   seedIfEmpty(){
     if (this.read('siswa').length) return;
     const siswa = [
-      { ID:'SIS-1', NIS:'2201001', Nama:'Ahmad Fadillah', Kelas:'IX-A', JenisKelamin:'L', TempatTglLahir:'Semarang, 12-04-2011', Alamat:'Jl. Merdeka No. 12', NamaOrtu:'Budi Santoso', NoHPOrtu:'081234567801', Catatan:'', Barcode:'BK-2201001', FotoURL:'' },
-      { ID:'SIS-2', NIS:'2201002', Nama:'Siti Nurhaliza', Kelas:'IX-A', JenisKelamin:'P', TempatTglLahir:'Purwodadi, 03-08-2011', Alamat:'Jl. Anggrek No. 5', NamaOrtu:'Sri Wahyuni', NoHPOrtu:'081234567802', Catatan:'', Barcode:'BK-2201002', FotoURL:'' },
-      { ID:'SIS-3', NIS:'2201003', Nama:'Rizky Maulana', Kelas:'VIII-B', JenisKelamin:'L', TempatTglLahir:'Grobogan, 21-01-2012', Alamat:'Jl. Melati No. 9', NamaOrtu:'Agus Wibowo', NoHPOrtu:'081234567803', Catatan:'Perlu pemantauan kedisiplinan', Barcode:'BK-2201003', FotoURL:'' },
-      { ID:'SIS-4', NIS:'2201004', Nama:'Dewi Lestari', Kelas:'VIII-B', JenisKelamin:'P', TempatTglLahir:'Purwodadi, 15-11-2011', Alamat:'Jl. Kenanga No. 2', NamaOrtu:'Hendra Kusuma', NoHPOrtu:'081234567804', Catatan:'', Barcode:'BK-2201004', FotoURL:'' },
-      { ID:'SIS-5', NIS:'2201005', Nama:'Muhammad Iqbal', Kelas:'VII-C', JenisKelamin:'L', TempatTglLahir:'Semarang, 30-06-2012', Alamat:'Jl. Mawar No. 18', NamaOrtu:'Joko Prasetyo', NoHPOrtu:'081234567805', Catatan:'', Barcode:'BK-2201005', FotoURL:'' }
+      { ID:'SIS-1', NIS:'2201001', Nama:'Ahmad Fadillah', Kelas:'IX-A', JenisKelamin:'L', TempatTglLahir:'Semarang, 12-04-2011', Alamat:'Jl. Merdeka No. 12', NamaOrtu:'Budi Santoso', NoHPOrtu:'081234567801', Catatan:'', Barcode:'BK-2201001' },
+      { ID:'SIS-2', NIS:'2201002', Nama:'Siti Nurhaliza', Kelas:'IX-A', JenisKelamin:'P', TempatTglLahir:'Purwodadi, 03-08-2011', Alamat:'Jl. Anggrek No. 5', NamaOrtu:'Sri Wahyuni', NoHPOrtu:'081234567802', Catatan:'', Barcode:'BK-2201002' },
+      { ID:'SIS-3', NIS:'2201003', Nama:'Rizky Maulana', Kelas:'VIII-B', JenisKelamin:'L', TempatTglLahir:'Grobogan, 21-01-2012', Alamat:'Jl. Melati No. 9', NamaOrtu:'Agus Wibowo', NoHPOrtu:'081234567803', Catatan:'Perlu pemantauan kedisiplinan', Barcode:'BK-2201003' },
+      { ID:'SIS-4', NIS:'2201004', Nama:'Dewi Lestari', Kelas:'VIII-B', JenisKelamin:'P', TempatTglLahir:'Purwodadi, 15-11-2011', Alamat:'Jl. Kenanga No. 2', NamaOrtu:'Hendra Kusuma', NoHPOrtu:'081234567804', Catatan:'', Barcode:'BK-2201004' },
+      { ID:'SIS-5', NIS:'2201005', Nama:'Muhammad Iqbal', Kelas:'VII-C', JenisKelamin:'L', TempatTglLahir:'Semarang, 30-06-2012', Alamat:'Jl. Mawar No. 18', NamaOrtu:'Joko Prasetyo', NoHPOrtu:'081234567805', Catatan:'', Barcode:'BK-2201005' }
     ];
     this.write('siswa', siswa);
     const today = new Date(); const ymd = (d) => d.toISOString().slice(0,10);
@@ -126,14 +334,28 @@ const DemoAdapter = {
       { ID:'KOL-1', Tanggal: ymd(today), SiswaID:'SIS-3', Nama:'Rizky Maulana', Kelas:'VIII-B', Jenis:'Pemanggilan Orang Tua', Tujuan:'Membahas kedisiplinan anak', Hasil:'Orang tua berkomitmen mendampingi di rumah', Petugas:'Bu Ratna, S.Pd' }
     ];
     this.write('kolaborasi', kolaborasi);
-    const kebiasaan = [
-      { ID:'HAB-1', Tanggal: ymd(today), SiswaID:'SIS-1', Nama:'Ahmad Fadillah', Kelas:'IX-A',
-        BangunPagiPukul:'05.00', IbadahSholat:'Subuh, Duhur, Ashar, Maghrib, Isya', IbadahDhuha:'Ya', IbadahTadarus:'Juz 5',
-        IbadahLainnya:'', OlahragaJenis:'Lari pagi', OlahragaDurasi:'20', BelajarMapel:'Matematika',
-        MakanMenu:'Nasi, sayur bayam, telur, buah', BermasyarakatKegiatan:'Kerja bakti lingkungan',
-        IstirahatPukul:'21.00', ParafOrtu:'Ya', ParafGuru:'', CatatanGuru:'' }
-    ];
-    this.write('kebiasaan', kebiasaan);
+    const masterPelanggaran = [
+      ['Terlambat masuk sekolah', 5, 'Ringan'],
+      ['Tidak memakai atribut lengkap', 5, 'Ringan'],
+      ['Tidak mengerjakan tugas/PR', 5, 'Ringan'],
+      ['Makan/minum di kelas saat KBM', 5, 'Ringan'],
+      ['Membuang sampah sembarangan', 5, 'Ringan'],
+      ['Tidak mengikuti upacara', 10, 'Ringan'],
+      ['Rambut/seragam tidak sesuai aturan', 10, 'Ringan'],
+      ['Membawa HP tanpa izin', 15, 'Sedang'],
+      ['Bolos jam pelajaran', 15, 'Sedang'],
+      ['Keluar kelas tanpa izin', 15, 'Sedang'],
+      ['Berkata tidak sopan kepada teman', 20, 'Sedang'],
+      ['Mencontek saat ujian', 25, 'Sedang'],
+      ['Merokok di lingkungan sekolah', 50, 'Berat'],
+      ['Berkelahi dengan teman', 50, 'Berat'],
+      ['Membawa/menggunakan barang terlarang', 75, 'Berat'],
+      ['Melawan/tidak sopan kepada guru', 75, 'Berat'],
+      ['Merusak fasilitas sekolah', 50, 'Berat'],
+      ['Bullying/perundungan', 75, 'Berat'],
+      ['Lainnya', 5, 'Lainnya']
+    ].map((r,i) => ({ ID:'MPL-'+(i+1), JenisPelanggaran:r[0], Poin:r[1], Kategori:r[2] }));
+    this.write('masterPelanggaran', masterPelanggaran);
   }
 };
 
@@ -195,7 +417,10 @@ function uniqueClasses(){
   const set = new Set(STATE.siswa.map(s => s.Kelas).filter(Boolean));
   return Array.from(set).sort();
 }
-function siswaById(id){ return STATE.siswa.find(s => String(s.ID) === String(id)); }
+function siswaById(id){
+  return STATE.siswa.find(s => String(s.ID) === String(id))
+    || (STATE.siswaLulus || []).map(a => ({ ...a, ID: a.SiswaID })).find(a => String(a.ID) === String(id));
+}
 function isThisMonth(dateStr){
   if (!dateStr) return false;
   const d = new Date(dateStr); const now = new Date();
@@ -206,8 +431,14 @@ function isThisMonth(dateStr){
 async function loadAll(){
   showLoading(true);
   try{
-    const results = await Promise.all(TYPES.map(t => adapter.getAll(t)));
-    TYPES.forEach((t,i) => STATE[t] = results[i] || []);
+    const data = await adapter.getAllBatch();
+    TYPES.forEach(t => STATE[t] = data[t] || []);
+    STATE.masterPelanggaran = data.masterPelanggaran || [];
+    STATE.guru = data.guru || [];
+    STATE.konselor = data.konselor || [];
+    STATE.siswaLulus = data.siswaLulus || [];
+    applySettingsFromServer(data.pengaturan || {});
+    applyProfileFromServer(data._me);
     populateClassFilters();
     renderCurrentPage();
     renderDashboard();
@@ -218,9 +449,30 @@ async function loadAll(){
   }
 }
 
+/* Terapkan Profil Sekolah yang datang dari server (Google Sheet / mode demo) dan
+   simpan salinannya di localStorage supaya lain kali app dibuka, identitas
+   sekolah langsung tampil seketika (dari cache) sebelum data server selesai
+   dimuat, lalu diperbarui lagi begitu respons server datang. */
+function applySettingsFromServer(map){
+  SCHOOL_NAME = map.NamaSekolah || '';
+  SCHOOL_YEAR = map.TahunPelajaran || '';
+  SCHOOL_LOGO = map.LogoSekolah || '';
+  SCHOOL_CITY = map.KotaSekolah || '';
+  SCHOOL_BK_NAME = map.NamaGuruBK || '';
+  SCHOOL_BK_NIP = map.NipGuruBK || '';
+  localStorage.setItem('bk_school_city', SCHOOL_CITY);
+  localStorage.setItem('bk_school_bk_name', SCHOOL_BK_NAME);
+  localStorage.setItem('bk_school_bk_nip', SCHOOL_BK_NIP);
+  localStorage.setItem('bk_school_name', SCHOOL_NAME);
+  localStorage.setItem('bk_school_year', SCHOOL_YEAR);
+  if (SCHOOL_LOGO) localStorage.setItem('bk_school_logo', SCHOOL_LOGO);
+  else localStorage.removeItem('bk_school_logo');
+  renderSchoolProfile();
+}
+
 function populateClassFilters(){
   const classes = uniqueClasses();
-  const selectors = ['#filterKelasSiswa','#filterKelasAbsensi','#filterKelasPelanggaran','#filterKelasKonseling','#filterKelasKebiasaan','#reportKelas'];
+  const selectors = ['#filterKelasSiswa','#filterKelasAbsensi','#filterKelasPelanggaran','#filterKelasKonseling','#reportKelas'];
   selectors.forEach(sel => {
     const el = $(sel); if (!el) return;
     const current = el.value;
@@ -228,15 +480,167 @@ function populateClassFilters(){
     el.value = current;
   });
   populateReportSiswaSelect();
+  populateLulusTahunOptions();
 }
 
 function populateReportSiswaSelect(){
   const el = $('#reportSiswa'); if (!el) return;
   const current = el.value;
   const sorted = STATE.siswa.slice().sort((a,b) => (a.Nama||'').localeCompare(b.Nama||''));
-  el.innerHTML = '<option value="">Pilih siswa...</option>' + sorted.map(s => `<option value="${escapeHtml(s.ID)}">${escapeHtml(s.Nama)} — ${escapeHtml(s.Kelas)}</option>`).join('');
+  const alumni = (STATE.siswaLulus || []).slice().sort((a,b) => (a.Nama||'').localeCompare(b.Nama||''));
+  el.innerHTML = '<option value="">Pilih siswa...</option>' + sorted.map(s => `<option value="${escapeHtml(s.ID)}">${escapeHtml(s.Nama)} — ${escapeHtml(s.Kelas)}</option>`).join('')
+    + (alumni.length ? `<optgroup label="Siswa Lulus (Alumni)">${alumni.map(a => `<option value="${escapeHtml(a.SiswaID)}">${escapeHtml(a.Nama)} — Lulus ${escapeHtml(a.TahunLulus || '')}</option>`).join('')}</optgroup>` : '');
   el.value = current;
 }
+
+/* ---------------- KENAIKAN KELAS & KELULUSAN ----------------
+   Halaman terpisah (di bawah menu Laporan) untuk dua aksi massal terhadap
+   Data Siswa:
+   1) Kenaikan Kelas — centang beberapa/semua siswa di satu Kelas Asal, lalu
+      pindahkan sekaligus ke Kelas Tujuan (mis. VII-A -> VIII-A).
+   2) Kelulusan — centang beberapa/semua siswa kelas akhir yang benar-benar
+      sudah lulus, lalu keluarkan sekaligus dari Data Siswa (checkbox
+      "Kelulusan Massal" = pilih semua siswa di kelas itu).
+   Backend hanya mengizinkan Admin/Guru BK utama untuk kedua aksi ini (lihat
+   assertIsAdmin di Code.gs), dan menu ini pun disembunyikan untuk Guru
+   Mapel & Konselor di applyRoleUI(). */
+function renderKenaikan(){
+  const lt = $('#lulusTahun'); if (lt && !lt.value) lt.value = SCHOOL_YEAR || '';
+  const classes = uniqueClasses();
+  const kelasOptHtml = classes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+
+  const naikAsal = $('#naikKelasAsal');
+  if (naikAsal){
+    const cur = naikAsal.value;
+    naikAsal.innerHTML = '<option value="">Pilih kelas...</option>' + kelasOptHtml;
+    naikAsal.value = cur;
+  }
+  const naikTujuan = $('#naikKelasTujuan');
+  if (naikTujuan){
+    const cur = naikTujuan.value;
+    naikTujuan.innerHTML = '<option value="">Pilih kelas...</option>' + kelasOptHtml;
+    naikTujuan.value = cur;
+  }
+  const lulusKelas = $('#lulusKelas');
+  if (lulusKelas){
+    const cur = lulusKelas.value;
+    lulusKelas.innerHTML = '<option value="">Pilih kelas...</option>' + kelasOptHtml;
+    lulusKelas.value = cur;
+  }
+  renderKenaikanSiswaList('naik', naikAsal ? naikAsal.value : '');
+  renderKenaikanSiswaList('lulus', lulusKelas ? lulusKelas.value : '');
+}
+
+/* prefix: 'naik' atau 'lulus' — dipakai bersama karena kedua kartu (Kenaikan
+   Kelas & Kelulusan) punya struktur checklist siswa per kelas yang identik. */
+function renderKenaikanSiswaList(prefix, kelas){
+  const list = $(`#${prefix}SiswaList`);
+  const countEl = $(`#${prefix}Count`);
+  const checkAll = $(`#${prefix}CheckAll`);
+  if (!list) return;
+  if (!kelas){
+    list.innerHTML = `<p class="muted">Pilih kelas dahulu untuk menampilkan daftar siswa.</p>`;
+    if (checkAll) checkAll.checked = false;
+    if (countEl) countEl.textContent = 'Pilih kelas dahulu untuk menampilkan daftar siswa.';
+    return;
+  }
+  const siswaKelas = STATE.siswa.filter(s => s.Kelas === kelas).sort((a,b) => (a.Nama||'').localeCompare(b.Nama||''));
+  if (!siswaKelas.length){
+    list.innerHTML = `<p class="muted">Tidak ada data siswa untuk kelas ini.</p>`;
+    if (checkAll) checkAll.checked = false;
+    if (countEl) countEl.textContent = 'Tidak ada data siswa untuk kelas ini.';
+    return;
+  }
+  list.innerHTML = siswaKelas.map(s => `
+    <label class="checkbox-pill bulk-item">
+      <input type="checkbox" class="${prefix}-siswa-check" value="${escapeHtml(s.ID)}" checked />
+      <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+      <span>${escapeHtml(s.Nama)} <span class="muted">· NIS ${escapeHtml(s.NIS||'-')}</span></span>
+    </label>`).join('');
+  if (checkAll) checkAll.checked = true;
+  updateKenaikanCount(prefix);
+}
+
+function updateKenaikanCount(prefix){
+  const countEl = $(`#${prefix}Count`);
+  if (!countEl) return;
+  const total = $all(`.${prefix}-siswa-check`).length;
+  const checked = $all(`.${prefix}-siswa-check:checked`).length;
+  countEl.textContent = total ? `${checked} dari ${total} siswa dicentang` : 'Tidak ada data siswa untuk kelas ini.';
+}
+
+/* --- Kenaikan Kelas --- */
+$('#naikKelasAsal')?.addEventListener('change', e => renderKenaikanSiswaList('naik', e.target.value));
+$('#naikCheckAll')?.addEventListener('change', e => {
+  $all('.naik-siswa-check').forEach(cb => cb.checked = e.target.checked);
+  updateKenaikanCount('naik');
+});
+$('#naikSiswaList')?.addEventListener('change', e => {
+  if (e.target.classList.contains('naik-siswa-check')) updateKenaikanCount('naik');
+});
+$('#btnNaikkanKelas')?.addEventListener('click', async () => {
+  const kelasAsal = $('#naikKelasAsal').value;
+  const kelasTujuan = $('#naikKelasTujuan').value.trim();
+  if (!kelasAsal){ toast('Pilih Kelas Asal terlebih dahulu.', 'error'); return; }
+  if (!kelasTujuan){ toast('Kelas Tujuan wajib diisi.', 'error'); return; }
+  const checkedIds = $all('.naik-siswa-check:checked').map(cb => cb.value);
+  if (!checkedIds.length){ toast('Centang minimal satu siswa untuk dinaikkan kelasnya.', 'error'); return; }
+  if (!confirm(`Naikkan ${checkedIds.length} siswa dari ${kelasAsal} ke ${kelasTujuan}?`)) return;
+
+  showLoading(true);
+  try{
+    const result = await adapter.promoteSiswa(checkedIds, kelasTujuan);
+    STATE.siswa.forEach(s => { if (checkedIds.includes(String(s.ID))) s.Kelas = kelasTujuan; });
+    $('#naikKelasTujuan').value = '';
+    populateClassFilters();
+    renderKenaikan();
+    renderDashboard();
+    toast(`${result?.updated ?? checkedIds.length} siswa berhasil dinaikkan ke kelas ${kelasTujuan}.`, 'success');
+  }catch(err){
+    toast(err.message, 'error');
+  }finally{
+    showLoading(false);
+  }
+});
+
+/* --- Kelulusan --- */
+$('#lulusKelas')?.addEventListener('change', e => renderKenaikanSiswaList('lulus', e.target.value));
+$('#lulusCheckAll')?.addEventListener('change', e => {
+  $all('.lulus-siswa-check').forEach(cb => cb.checked = e.target.checked);
+  updateKenaikanCount('lulus');
+});
+$('#lulusSiswaList')?.addEventListener('change', e => {
+  if (e.target.classList.contains('lulus-siswa-check')) updateKenaikanCount('lulus');
+});
+$('#btnLuluskan')?.addEventListener('click', async () => {
+  const kelas = $('#lulusKelas').value;
+  if (!kelas){ toast('Pilih kelas terlebih dahulu.', 'error'); return; }
+  const checkedIds = $all('.lulus-siswa-check:checked').map(cb => cb.value);
+  if (!checkedIds.length){ toast('Centang minimal satu siswa untuk diluluskan.', 'error'); return; }
+  const tahunLulus = ($('#lulusTahun')?.value || '').trim() || SCHOOL_YEAR || String(new Date().getFullYear());
+  if (!confirm(`Luluskan ${checkedIds.length} siswa dari kelas ${kelas} (Tahun Lulus ${tahunLulus})? Siswa akan dikeluarkan dari Data Siswa dan dipindahkan ke laporan "Siswa Lulus". Riwayat BK mereka tetap tersimpan.`)) return;
+
+  showLoading(true);
+  try{
+    const result = await adapter.lulusSiswa(checkedIds, tahunLulus);
+    const tgl = new Date().toISOString().slice(0,10);
+    STATE.siswa.filter(s => checkedIds.includes(String(s.ID))).forEach(s => {
+      STATE.siswaLulus.push({ ID:'LUL-' + s.ID, SiswaID:s.ID, NIS:s.NIS, Nama:s.Nama, Kelas:s.Kelas, JenisKelamin:s.JenisKelamin,
+        TempatTglLahir:s.TempatTglLahir, Alamat:s.Alamat, NamaOrtu:s.NamaOrtu, NoHPOrtu:s.NoHPOrtu, Catatan:s.Catatan,
+        TahunLulus:tahunLulus, TanggalLulus:tgl });
+    });
+    STATE.siswa = STATE.siswa.filter(s => !checkedIds.includes(String(s.ID)));
+    populateClassFilters();
+    populateLulusTahunOptions();
+    renderKenaikan();
+    renderDashboard();
+    toast(`${result?.deleted ?? checkedIds.length} siswa berhasil diluluskan dan masuk ke Laporan > Siswa Lulus.`, 'success');
+  }catch(err){
+    toast(err.message, 'error');
+  }finally{
+    showLoading(false);
+  }
+});
 
 /* ---------------- NAVIGATION ---------------- */
 function goToPage(page){
@@ -245,7 +649,7 @@ function goToPage(page){
   $(`#page-${page}`)?.classList.add('active');
   $all('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === page));
   $all('.bn-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === page));
-  const titles = { dashboard:'Dashboard', siswa:'Data Siswa', absensi:'Absensi', pelanggaran:'Pelanggaran', konseling:'Konseling', kolaborasi:'Kolaborasi', kebiasaan:'7 Kebiasaan Anak Indonesia Hebat', laporan:'Laporan' };
+  const titles = { dashboard:'Dashboard', siswa:'Data Siswa', absensi:'Absensi', pelanggaran:'Pelanggaran', konseling:'Konseling', kolaborasi:'Kolaborasi', laporan:'Laporan', kenaikan:'Kenaikan & Kelulusan' };
   $('#pageTitle').textContent = titles[page] || page;
   closeMoreSheet();
   hideSearchDropdown();
@@ -258,7 +662,7 @@ function renderCurrentPage(q){
   if (currentPage === 'pelanggaran') renderPelanggaran(q);
   if (currentPage === 'konseling') renderKonseling(q);
   if (currentPage === 'kolaborasi') renderKolaborasi(q);
-  if (currentPage === 'kebiasaan') renderKebiasaan(q);
+  if (currentPage === 'kenaikan') renderKenaikan();
 }
 
 $all('.nav-item[data-page]').forEach(n => n.addEventListener('click', e => { e.preventDefault(); goToPage(n.dataset.page); }));
@@ -276,7 +680,7 @@ $('#refreshBtn').addEventListener('click', loadAll);
 /* ---------------- PENCARIAN GLOBAL ----------------
    Ketik di kotak pencarian atas untuk:
    1) Memfilter tabel/kartu di halaman yang sedang dibuka (siswa, absensi,
-      pelanggaran, konseling, kolaborasi, kebiasaan), dan
+      pelanggaran, konseling, kolaborasi), dan
    2) Menampilkan dropdown hasil pencarian siswa lintas halaman — klik salah
       satu hasil untuk langsung membuka Laporan Individu siswa tersebut. */
 $('#globalSearch').addEventListener('input', e => {
@@ -315,7 +719,7 @@ function renderSearchDropdown(q){
     dd.innerHTML = matchSiswa.map(s => {
       const c = countsFor(s.ID);
       return `<div class="search-dd-item">
-        ${avatarHtmlFor(s, 28)}
+        <span class="avatar-ring" style="width:28px;height:28px;font-size:10.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
         <span class="search-dd-info">
           <span class="search-dd-name">${escapeHtml(s.Nama)}</span>
           <span class="search-dd-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')} ${c.pelanggaran?`· ${c.pelanggaran} pelanggaran`:''} ${c.absensiAlpa?`· ${c.absensiAlpa}x alpa`:''}</span>
@@ -353,12 +757,177 @@ document.addEventListener('click', e => {
   }
 });
 
+/* ---------------- DROPDOWN JENIS PELANGGARAN (dari Template Pelanggaran) ---------------- */
+document.addEventListener('change', e => {
+  if (!e.target.classList.contains('jenis-pelanggaran-select')) return;
+  const wrap = e.target.closest('.jenis-pelanggaran-picker');
+  const hidden = wrap.querySelector('input[type=hidden]');
+  const customInput = wrap.querySelector('.jenis-pelanggaran-custom');
+  const form = wrap.closest('form');
+  const poinInput = form ? form.querySelector('[name="Poin"]') : null;
+  if (e.target.value === '__custom__'){
+    customInput.classList.remove('hidden');
+    customInput.value = '';
+    hidden.value = '';
+    customInput.focus();
+  } else {
+    customInput.classList.add('hidden');
+    hidden.value = e.target.value;
+    const opt = e.target.selectedOptions[0];
+    const poin = opt ? opt.dataset.poin : '';
+    if (poinInput && poin !== undefined && poin !== '') poinInput.value = poin;
+  }
+});
+document.addEventListener('input', e => {
+  if (!e.target.classList.contains('jenis-pelanggaran-custom')) return;
+  const wrap = e.target.closest('.jenis-pelanggaran-picker');
+  wrap.querySelector('input[type=hidden]').value = e.target.value;
+});
+
+/* ---------------- BUKTI FOTO HOME VISIT (Kolaborasi) ----------------
+   Field foto cuma ditampilkan saat Jenis Kegiatan = "Home Visit", dan foto
+   yang diupload otomatis diperkecil/dikompres (reuse resizeImageToDataUrl,
+   dipakai juga oleh Logo Sekolah) supaya muat disimpan sebagai satu sel di
+   Google Sheet maupun saat diekspor ke Excel lewat fitur Backup. */
+document.addEventListener('change', e => {
+  if (!(e.target.tagName === 'SELECT' && e.target.name === 'Jenis')) return;
+  const form = e.target.closest('form');
+  const wrap = form ? form.querySelector('[data-bukti-foto-wrap]') : null;
+  if (wrap) wrap.style.display = (e.target.value === 'Home Visit') ? '' : 'none';
+});
+document.addEventListener('click', e => {
+  const uploadBtn = e.target.closest('.bukti-foto-btn');
+  if (uploadBtn){
+    uploadBtn.closest('.bukti-foto-wrap').querySelector('.bukti-foto-file').click();
+    return;
+  }
+  const removeBtn = e.target.closest('.bukti-foto-remove-btn');
+  if (removeBtn){
+    const wrap = removeBtn.closest('.bukti-foto-wrap');
+    wrap.querySelector('.bukti-foto-preview-wrap').innerHTML = `<i class="fa-solid fa-camera"></i>`;
+    wrap.querySelector('.bukti-foto-hidden').value = '';
+    removeBtn.style.display = 'none';
+    wrap.querySelector('.bukti-foto-btn').innerHTML = '<i class="fa-solid fa-upload"></i> Upload Foto';
+  }
+});
+document.addEventListener('change', async e => {
+  if (!e.target.classList.contains('bukti-foto-file')) return;
+  const file = e.target.files[0];
+  if (!file) return;
+  const wrap = e.target.closest('.bukti-foto-wrap');
+  if (!file.type.startsWith('image/')){ toast('File harus berupa gambar.', 'error'); e.target.value=''; return; }
+  const btn = wrap.querySelector('.bukti-foto-btn');
+  const originalLabel = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Memproses...';
+  try{
+    // maxChars dijaga di bawah 32.767 (batas karakter per sel Excel), supaya
+    // foto ini tetap aman diekspor lewat fitur Backup (Excel) tanpa terpotong/error.
+    const dataUrl = await resizeImageToDataUrl(file, 420, 30000);
+    wrap.querySelector('.bukti-foto-preview-wrap').innerHTML = `<img src="${escapeHtml(dataUrl)}" alt="Bukti Foto" />`;
+    wrap.querySelector('.bukti-foto-hidden').value = dataUrl;
+    wrap.querySelector('.bukti-foto-remove-btn').style.display = '';
+    btn.innerHTML = '<i class="fa-solid fa-upload"></i> Ganti Foto';
+  }catch(err){
+    toast(err.message, 'error');
+    btn.innerHTML = originalLabel;
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+/* ---------------- TANDA TANGAN / PARAF (Signature Pad) ----------------
+   Dipakai di form Sesi Konseling supaya siswa bisa langsung tanda tangan
+   atau paraf di layar (mouse/trackpad atau sentuh di HP/tablet) begitu
+   sesi konseling selesai. Hasilnya disimpan sebagai gambar (PNG data URL)
+   ke kolom tersembunyi TTD — persis seperti pola Bukti Foto Home Visit di
+   atas — sehingga otomatis ikut tersimpan ke Google Sheet lewat createRow/
+   updateRow yang sudah ada, dan otomatis ikut tampil di Laporan (kolom TTD,
+   di sebelah Rencana Tindak Lanjut) tanpa perlu perubahan lain. */
+function initSignaturePads(){
+  $all('.signature-wrap .signature-canvas').forEach(canvas => {
+    if (canvas.dataset.inited) return;
+    canvas.dataset.inited = '1';
+    const wrap = canvas.closest('.signature-wrap');
+    const hidden = wrap.querySelector('.signature-hidden');
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.clientWidth || 300;
+    const cssHeight = 150;
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    canvas.style.height = cssHeight + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.strokeStyle = '#1a2733';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    canvas._sigCtx = ctx;
+    canvas._sigCssSize = { w: cssWidth, h: cssHeight };
+    if (hidden.value){
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, cssWidth, cssHeight);
+      img.src = hidden.value;
+    }
+  });
+}
+function signatureCanvasPos(canvas, evt){
+  const rect = canvas.getBoundingClientRect();
+  return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+}
+function endSignatureStroke(canvas){
+  if (!canvas || !canvas._sigDrawing) return;
+  canvas._sigDrawing = false;
+  const wrap = canvas.closest('.signature-wrap');
+  wrap.querySelector('.signature-hidden').value = canvas.toDataURL('image/png');
+}
+document.addEventListener('pointerdown', e => {
+  const canvas = e.target.closest('.signature-canvas');
+  if (!canvas || !canvas._sigCtx) return;
+  e.preventDefault();
+  canvas.setPointerCapture(e.pointerId);
+  const pos = signatureCanvasPos(canvas, e);
+  canvas._sigCtx.beginPath();
+  canvas._sigCtx.moveTo(pos.x, pos.y);
+  canvas._sigDrawing = true;
+  const placeholder = canvas.closest('.signature-wrap').querySelector('.signature-placeholder');
+  if (placeholder) placeholder.style.display = 'none';
+});
+document.addEventListener('pointermove', e => {
+  const canvas = e.target.closest('.signature-canvas');
+  if (!canvas || !canvas._sigDrawing) return;
+  const pos = signatureCanvasPos(canvas, e);
+  canvas._sigCtx.lineTo(pos.x, pos.y);
+  canvas._sigCtx.stroke();
+});
+document.addEventListener('pointerup', e => endSignatureStroke(e.target.closest('.signature-canvas')));
+document.addEventListener('pointercancel', e => endSignatureStroke(e.target.closest('.signature-canvas')));
+document.addEventListener('click', e => {
+  const clearBtn = e.target.closest('.signature-clear-btn');
+  if (!clearBtn) return;
+  const wrap = clearBtn.closest('.signature-wrap');
+  const canvas = wrap.querySelector('.signature-canvas');
+  if (canvas && canvas._sigCtx) canvas._sigCtx.clearRect(0, 0, canvas._sigCssSize.w, canvas._sigCssSize.h);
+  wrap.querySelector('.signature-hidden').value = '';
+  const placeholder = wrap.querySelector('.signature-placeholder');
+  if (placeholder) placeholder.style.display = '';
+});
+
 /* ---------------- KOMBOBOX PENCARIAN SISWA (dipakai di semua form: absensi, pelanggaran, dst) ---------------- */
+/* Daftar kelas yang boleh dipilih saat MENCATAT data lewat form. Konselor dengan kelas
+   tanggung jawab hanya melihat kelasnya sendiri (server tetap menolak kelas lain). */
+function writableKelasList(){
+  const all = uniqueClasses();
+  if (USER_ROLE !== 'konselor' || !KONSELOR_KELAS.length) return all;
+  const own = KONSELOR_KELAS.map(k => String(k).trim().toLowerCase());
+  return all.filter(c => own.includes(String(c).trim().toLowerCase()));
+}
 function siswaPickerFilter(wrap, query){
   const q = (query||'').trim().toLowerCase();
   const kelasSel = wrap.querySelector('.siswa-picker-kelas');
   const kelas = kelasSel ? kelasSel.value : '';
-  let list = STATE.siswa;
+  const allowed = writableKelasList();
+  let list = STATE.siswa.filter(s => allowed.includes(s.Kelas));
   if (kelas) list = list.filter(s => s.Kelas === kelas);
   return list.filter(s => !q ||
     (s.Nama||'').toLowerCase().includes(q) ||
@@ -371,13 +940,14 @@ function siswaPickerRenderDropdown(wrap, query){
   const matches = siswaPickerFilter(wrap, query);
   dd.innerHTML = matches.length ? matches.map(s => `
       <button type="button" class="search-dd-item" data-pick-siswa="${escapeHtml(s.ID)}">
-        ${avatarHtmlFor(s, 26)}
+        <span class="avatar-ring" style="width:26px;height:26px;font-size:10px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
         <span class="search-dd-info"><span class="search-dd-name">${escapeHtml(s.Nama)}</span><span class="search-dd-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</span></span>
       </button>`).join('')
     : '<div class="search-dd-empty">Siswa tidak ditemukan untuk filter ini.</div>';
   dd.classList.add('open');
 }
 document.addEventListener('input', e => {
+  if (e.target.name === 'NamaOrtuWali') e.target.dataset.auto = '0'; // diketik manual -> jangan ditimpa otomatis
   if (!e.target.classList.contains('siswa-picker-input')) return;
   const wrap = e.target.closest('.siswa-picker');
   wrap.querySelector('input[type=hidden]').value = '';
@@ -406,6 +976,12 @@ document.addEventListener('click', e => {
     wrap.querySelector('input[type=hidden]').value = s.ID;
     wrap.querySelector('.siswa-picker-input').value = `${s.Nama} — ${s.Kelas||'-'}`;
     wrap.querySelector('.siswa-picker-dropdown').classList.remove('open');
+    // Form Kolaborasi: isi otomatis Nama Orang Tua/Wali dari data siswa (hanya kalau masih kosong)
+    const ortuInput = wrap.closest('form') && wrap.closest('form').querySelector('input[name="NamaOrtuWali"]');
+    if (ortuInput && (!ortuInput.value.trim() || ortuInput.dataset.auto === '1')){
+      ortuInput.value = s.NamaOrtu || '';
+      ortuInput.dataset.auto = '1'; // terisi otomatis: boleh diganti lagi kalau pilih siswa lain
+    }
     return;
   }
   $all('.siswa-picker-dropdown.open').forEach(dd => {
@@ -415,6 +991,12 @@ document.addEventListener('click', e => {
 
 /* ---------------- DASHBOARD ---------------- */
 function renderDashboard(){
+  // Chart.js gagal (dan bisa "macet" sampai reload penuh) kalau dipaksa menggambar ke
+  // canvas yang sedang disembunyikan (halaman Dashboard tidak sedang aktif). Jadi kalau
+  // dipanggil dari halaman lain (mis. setelah simpan Absensi/Pelanggaran), cukup lewati —
+  // grafik akan otomatis digambar ulang dengan data terbaru begitu Dashboard dibuka lagi.
+  if (currentPage !== 'dashboard') return;
+
   $('#statSiswa').textContent = STATE.siswa.length;
   $('#statAlpa').textContent = STATE.absensi.filter(a => a.Status === 'Alpa' && isThisMonth(a.Tanggal)).length;
   $('#statPelanggaran').textContent = STATE.pelanggaran.filter(p => isThisMonth(p.Tanggal)).length;
@@ -508,7 +1090,7 @@ function renderSiswa(searchQuery){
     return `<tr>
       <td>${escapeHtml(s.NIS||'-')}</td>
       <td><div style="display:flex;align-items:center;gap:10px">
-            ${avatarHtmlFor(s, 30)}
+            <span class="avatar-ring" style="width:30px;height:30px;font-size:11px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
             ${escapeHtml(s.Nama||'-')}
           </div></td>
       <td>${escapeHtml(s.Kelas||'-')}</td>
@@ -575,10 +1157,19 @@ function renderPelanggaran(searchQuery){
 ['#filterKelasPelanggaran','#filterBulanPelanggaran'].forEach(sel => $(sel).addEventListener('change', renderPelanggaran));
 
 /* ---------------- KONSELING (card list) ---------------- */
+/* Untuk tampilan Konseling, identitas siswa ditampilkan sebagai NIS (bukan Nama)
+   supaya lebih ringkas & sesuai kebutuhan sekolah — diambil dari data Siswa yang
+   masih aktif lewat SiswaID, dengan fallback aman kalau siswa itu sudah dihapus. */
+function konselingDisplayNis(k){
+  const s = siswaById(k.SiswaID);
+  if (s && s.NIS) return s.NIS;
+  return k.NIS || '-';
+}
+
 function renderKonseling(searchQuery){
   const kelas = $('#filterKelasKonseling').value;
   let rows = STATE.konseling.filter(k => !kelas || k.Kelas===kelas);
-  if (searchQuery) rows = rows.filter(k => (k.Nama||'').toLowerCase().includes(searchQuery) || (k.Topik||'').toLowerCase().includes(searchQuery));
+  if (searchQuery) rows = rows.filter(k => (k.Nama||'').toLowerCase().includes(searchQuery) || (k.Topik||'').toLowerCase().includes(searchQuery) || konselingDisplayNis(k).toLowerCase().includes(searchQuery));
   rows.sort((a,b)=> new Date(b.Tanggal)-new Date(a.Tanggal));
   const list = $('#listKonseling');
   $('#emptyKonseling').style.display = rows.length ? 'none' : 'block';
@@ -587,7 +1178,7 @@ function renderKonseling(searchQuery){
       <div class="entry-card-head">
         <div class="entry-avatar-row">
           <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${escapeHtml(initials(k.Nama))}</span>
-          <div><div class="entry-name">${escapeHtml(k.Nama||'-')}</div><div class="entry-sub">${escapeHtml(k.Kelas||'-')} · ${escapeHtml(k.Topik||'Konseling')}</div></div>
+          <div><div class="entry-name">${escapeHtml(konselingDisplayNis(k))}</div><div class="entry-sub">${escapeHtml(k.Kelas||'-')} · ${escapeHtml(k.Topik||'Konseling')}</div></div>
         </div>
         <div class="row-actions">
           <button class="icon-btn-sm" data-edit="konseling" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-pen"></i></button>
@@ -598,6 +1189,7 @@ function renderKonseling(searchQuery){
         <p><b>Masalah:</b> ${escapeHtml(k.Masalah||'-')}</p>
         <p><b>Hasil:</b> ${escapeHtml(k.HasilKonseling||'-')}</p>
         <p><b>Tindak lanjut:</b> ${escapeHtml(k.TindakLanjut||'-')}</p>
+        ${k.TTD ? `<p style="margin-top:8px"><b>TTD Siswa:</b><br/><img src="${escapeHtml(k.TTD)}" alt="Tanda Tangan Siswa" class="signature-thumb" data-lightbox-src="${escapeHtml(k.TTD)}" title="Klik untuk perbesar" /></p>` : ''}
       </div>
       <div class="entry-foot"><span class="entry-date">${fmtDate(k.Tanggal)}</span><span class="entry-sub">${escapeHtml(k.Konselor||'')}</span></div>
     </div>`).join('');
@@ -626,108 +1218,83 @@ function renderKolaborasi(searchQuery){
       </div>
       <div class="entry-body">
         <p><span class="badge badge--info">${escapeHtml(k.Jenis||'-')}</span></p>
-        <p style="margin-top:8px"><b>Tujuan:</b> ${escapeHtml(k.Tujuan||'-')}</p>
+        <p style="margin-top:8px"><b>Orang Tua/Wali:</b> ${escapeHtml(k.NamaOrtuWali||'-')}</p>
+        <p><b>Tujuan:</b> ${escapeHtml(k.Tujuan||'-')}</p>
         <p><b>Hasil:</b> ${escapeHtml(k.Hasil||'-')}</p>
+        ${k.BuktiFoto ? `<p style="margin-top:8px"><b>Bukti Home Visit:</b><br/><img src="${escapeHtml(k.BuktiFoto)}" alt="Bukti Home Visit" class="bukti-foto-thumb" data-lightbox-id="${escapeHtml(k.ID)}" title="Klik untuk perbesar" /></p>` : ''}
       </div>
       <div class="entry-foot"><span class="entry-date">${fmtDate(k.Tanggal)}</span><span class="entry-sub">${escapeHtml(k.Petugas||'')}</span></div>
     </div>`).join('');
 }
 $('#filterJenisKolaborasi').addEventListener('change', renderKolaborasi);
 
-/* ---------------- 7 KEBIASAAN ANAK INDONESIA HEBAT (card list) ---------------- */
-function habitDone(v){ return v && String(v).trim() && String(v).trim().toLowerCase() !== 'tidak'; }
-function renderKebiasaan(searchQuery){
-  const kelas = $('#filterKelasKebiasaan').value;
-  const tgl = $('#filterTglKebiasaan').value;
-  let rows = STATE.kebiasaan.filter(k => (!kelas || k.Kelas===kelas) && (!tgl || k.Tanggal===tgl));
-  if (searchQuery) rows = rows.filter(k => (k.Nama||'').toLowerCase().includes(searchQuery));
-  rows.sort((a,b)=> new Date(b.Tanggal)-new Date(a.Tanggal));
-  const list = $('#listKebiasaan');
-  $('#emptyKebiasaan').style.display = rows.length ? 'none' : 'block';
-
-  const habitDefs = [
-    { key:'BangunPagiPukul', label:'Bangun Pagi', icon:'fa-sun', display: v => v || '-' },
-    { key:'IbadahSholat', label:'Beribadah', icon:'fa-mosque', display: (v,k) => [v, habitDone(k.IbadahDhuha)?'Dhuha':'', k.IbadahTadarus?('Tadarus: '+k.IbadahTadarus):''].filter(Boolean).join(', ') || '-' },
-    { key:'OlahragaJenis', label:'Berolahraga', icon:'fa-person-running', display: (v,k) => v ? `${v}${k.OlahragaDurasi?` (${k.OlahragaDurasi} menit)`:''}` : '-' },
-    { key:'BelajarMapel', label:'Gemar Belajar', icon:'fa-book', display: v => v || '-' },
-    { key:'MakanMenu', label:'Makan Sehat & Bergizi', icon:'fa-utensils', display: v => v || '-' },
-    { key:'BermasyarakatKegiatan', label:'Bermasyarakat', icon:'fa-people-group', display: v => v || '-' },
-    { key:'IstirahatPukul', label:'Istirahat Cukup', icon:'fa-bed', display: v => v || '-' }
-  ];
-
-  list.innerHTML = rows.map(k => `
-    <div class="entry-card habit-card">
-      <div class="entry-card-head">
-        <div class="entry-avatar-row">
-          <span class="avatar-ring" style="background:${colorFromString(k.Nama)}">${escapeHtml(initials(k.Nama))}</span>
-          <div><div class="entry-name">${escapeHtml(k.Nama||'-')}</div><div class="entry-sub">${escapeHtml(k.Kelas||'-')} · ${fmtDate(k.Tanggal)}</div></div>
-        </div>
-        <div class="row-actions">
-          <button class="icon-btn-sm" data-print-habit="${escapeHtml(k.ID)}" title="Cetak formulir"><i class="fa-solid fa-print"></i></button>
-          <button class="icon-btn-sm" data-edit="kebiasaan" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-pen"></i></button>
-          <button class="icon-btn-sm danger" data-del="kebiasaan" data-id="${escapeHtml(k.ID)}"><i class="fa-solid fa-trash"></i></button>
-        </div>
-      </div>
-      <div class="habit-grid">
-        ${habitDefs.map(h => `<div class="habit-item"><i class="fa-solid ${h.icon}"></i><div><span class="habit-label">${h.label}</span><span class="habit-value">${escapeHtml(h.display(k[h.key], k))}</span></div></div>`).join('')}
-      </div>
-      <div class="entry-foot">
-        <span class="entry-sub">${habitDone(k.ParafOrtu)?'<i class="fa-solid fa-check" style="color:var(--success)"></i> Paraf Ortu':'<i class="fa-regular fa-circle" style="color:var(--ink-soft)"></i> Paraf Ortu'} &nbsp;&nbsp; ${habitDone(k.ParafGuru)?'<i class="fa-solid fa-check" style="color:var(--success)"></i> Paraf Guru':'<i class="fa-regular fa-circle" style="color:var(--ink-soft)"></i> Paraf Guru'}</span>
-      </div>
-      ${k.CatatanGuru ? `<div class="habit-note"><b>Catatan Guru:</b> ${escapeHtml(k.CatatanGuru)}</div>` : ''}
-    </div>`).join('');
+/* ---------------- IMAGE LIGHTBOX (perbesar foto bukti, tidak buka tab baru) ----------------
+   Dipakai untuk foto Bukti Home Visit — baik di kartu Kolaborasi maupun di
+   halaman Laporan. Klik thumbnail untuk membuka, scroll/tombol untuk
+   zoom in-out, klik area gelap / tombol X / Esc untuk menutup. */
+let lightboxScale = 1;
+const LIGHTBOX_MIN = 1, LIGHTBOX_MAX = 4, LIGHTBOX_STEP = 0.5;
+function openImageLightbox(src){
+  if (!src) return;
+  $('#lightboxImg').src = src;
+  setLightboxScale(1);
+  $('#lightboxBackdrop').classList.add('open');
 }
-$('#filterKelasKebiasaan').addEventListener('change', () => renderKebiasaan());
-$('#filterTglKebiasaan').addEventListener('change', () => renderKebiasaan());
-
-/* Cetak satu formulir kebiasaan meniru layout kertas "7 Kebiasaan Anak Indonesia Hebat" */
-function printKebiasaanForm(id){
-  const k = STATE.kebiasaan.find(o => String(o.ID)===String(id));
-  if (!k) return;
-  const row = (label, value) => `<tr><td class="hb-k">${escapeHtml(label)}</td><td class="hb-v">${escapeHtml(value) || '-'}</td></tr>`;
-  const html = `
-    <h2>7 Kebiasaan Anak Indonesia Hebat</h2>
-    <div class="report-head-line"><span>Nama: ${escapeHtml(k.Nama||'-')} &nbsp;|&nbsp; Kelas: ${escapeHtml(k.Kelas||'-')}</span><span>Hari, tanggal: ${fmtDate(k.Tanggal)}</span></div>
-    <table class="hb-table">
-      <tbody>
-        ${row('1. Bangun Pagi', 'Pukul: ' + (k.BangunPagiPukul||'-'))}
-        ${row('2. Beribadah', (k.IbadahSholat||'-') + (habitDone(k.IbadahDhuha)?', Dhuha':'') + (k.IbadahTadarus?', Tadarus/Murajaah: '+k.IbadahTadarus:'') + (k.IbadahLainnya?', Lainnya: '+k.IbadahLainnya:''))}
-        ${row('3. Berolahraga', 'Jenis: ' + (k.OlahragaJenis||'-') + ' — Durasi: ' + (k.OlahragaDurasi||'-'))}
-        ${row('4. Gemar Belajar', 'Mapel: ' + (k.BelajarMapel||'-'))}
-        ${row('5. Makan Sehat dan Bergizi', 'Menu: ' + (k.MakanMenu||'-'))}
-        ${row('6. Bermasyarakat', 'Kegiatan: ' + (k.BermasyarakatKegiatan||'-'))}
-        ${row('7. Istirahat Cukup', 'Pukul: ' + (k.IstirahatPukul||'-'))}
-      </tbody>
-    </table>
-    <table class="hb-table" style="margin-top:14px">
-      <tbody>
-        <tr>
-          <td class="hb-k" style="width:20%">Paraf Ortu</td>
-          <td class="hb-k" style="width:20%">Paraf Guru</td>
-          <td class="hb-k">Catatan Guru</td>
-        </tr>
-        <tr style="height:70px">
-          <td>${habitDone(k.ParafOrtu)?'✓':''}</td>
-          <td>${habitDone(k.ParafGuru)?'✓':''}</td>
-          <td>${escapeHtml(k.CatatanGuru||'')}</td>
-        </tr>
-      </tbody>
-    </table>`;
-  $('#reportPreview').innerHTML = html;
-  $('#reportPreviewCard').style.display = 'block';
-  goToPage('laporan');
-  $('#reportPreviewCard').scrollIntoView({ behavior:'smooth' });
-  setTimeout(() => window.print(), 400);
+function closeImageLightbox(){
+  $('#lightboxBackdrop').classList.remove('open');
+  $('#lightboxImg').src = '';
 }
+function setLightboxScale(scale){
+  lightboxScale = Math.min(LIGHTBOX_MAX, Math.max(LIGHTBOX_MIN, scale));
+  const img = $('#lightboxImg');
+  img.style.transform = `scale(${lightboxScale})`;
+  img.classList.toggle('zoomed', lightboxScale > 1);
+}
+document.addEventListener('click', e => {
+  const trigger = e.target.closest('[data-lightbox-id]');
+  if (trigger){
+    const k = STATE.kolaborasi.find(o => String(o.ID) === String(trigger.dataset.lightboxId));
+    if (k && k.BuktiFoto) openImageLightbox(k.BuktiFoto);
+    return;
+  }
+  const trigger2 = e.target.closest('[data-lightbox-src]');
+  if (trigger2){ openImageLightbox(trigger2.dataset.lightboxSrc); }
+});
+$('#lightboxImg').addEventListener('click', () => setLightboxScale(lightboxScale > 1 ? 1 : 2));
+$('#lightboxZoomIn').addEventListener('click', () => setLightboxScale(lightboxScale + LIGHTBOX_STEP));
+$('#lightboxZoomOut').addEventListener('click', () => setLightboxScale(lightboxScale - LIGHTBOX_STEP));
+$('#lightboxReset').addEventListener('click', () => setLightboxScale(1));
+$('#lightboxClose').addEventListener('click', closeImageLightbox);
+$('#lightboxBackdrop').addEventListener('click', e => { if (e.target.id === 'lightboxBackdrop') closeImageLightbox(); });
+$('#lightboxBackdrop').addEventListener('wheel', e => {
+  if (!$('#lightboxBackdrop').classList.contains('open')) return;
+  e.preventDefault();
+  setLightboxScale(lightboxScale + (e.deltaY < 0 ? LIGHTBOX_STEP : -LIGHTBOX_STEP));
+}, { passive:false });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#lightboxBackdrop').classList.contains('open')) closeImageLightbox();
+});
 
 /* ---------------- ROW ACTION DELEGATION (edit/delete) ---------------- */
+/* Konselor (Guru BK) sekarang boleh mengubah/menghapus bukan cuma Konseling,
+   tapi juga Kolaborasi, Absensi, dan Pelanggaran — selaras dengan
+   ROLE_WRITABLE_TYPES.konselor di backend. Pembatasan sesungguhnya (per
+   kelas tanggung jawab) tetap ditegakkan di server; validasi di sini murni
+   supaya tombol edit/delete tidak memunculkan form untuk tipe yang memang
+   tidak boleh diakses konselor sama sekali (mis. Data Siswa). */
+const KONSELOR_WRITABLE_TYPES_UI = ['konseling', 'kolaborasi', 'absensi', 'pelanggaran'];
 document.addEventListener('click', async (e) => {
   const editBtn = e.target.closest('[data-edit]');
   const delBtn = e.target.closest('[data-del]');
-  const printHabitBtn = e.target.closest('[data-print-habit]');
   const waBtn = e.target.closest('[data-wa]');
   if (waBtn){ openWaForAbsen(waBtn.dataset.wa); return; }
-  if (printHabitBtn){ printKebiasaanForm(printHabitBtn.dataset.printHabit); return; }
+  if ((editBtn || delBtn) && USER_ROLE === 'konselor'){
+    const t = (editBtn || delBtn).dataset.edit || (editBtn || delBtn).dataset.del;
+    if (!KONSELOR_WRITABLE_TYPES_UI.includes(t)){
+      toast('Akun Guru BK (Konselor) tidak bisa mengubah/menghapus data ini.', 'error');
+      return;
+    }
+  }
   if (editBtn) openForm(editBtn.dataset.edit, editBtn.dataset.id);
   if (delBtn){
     const type = delBtn.dataset.del, id = delBtn.dataset.id;
@@ -736,8 +1303,7 @@ document.addEventListener('click', async (e) => {
     try{
       await adapter.delete(type, id);
       STATE[type] = STATE[type].filter(o => String(o.ID) !== String(id));
-      try{ renderCurrentPage(); renderDashboard(); populateClassFilters(); }
-      catch(renderErr){ console.warn('Data terhapus, tapi gagal me-refresh tampilan:', renderErr); }
+      renderCurrentPage(); renderDashboard(); populateClassFilters();
       toast('Data berhasil dihapus.', 'success');
     }catch(err){ toast(err.message, 'error'); }
     finally{ showLoading(false); }
@@ -762,7 +1328,6 @@ const FORM_CONFIG = {
       { key:'NoHPOrtu', label:'No. HP Orang Tua', type:'text' },
       { key:'Alamat', label:'Alamat', type:'textarea', full:true },
       { key:'Catatan', label:'Catatan Khusus', type:'textarea', full:true },
-      { key:'FotoURL', label:'Foto Siswa', type:'photo', full:true },
       { key:'Barcode', label:'Kode QR (untuk kartu absensi)', type:'barcode', full:true }
     ]
   },
@@ -780,7 +1345,7 @@ const FORM_CONFIG = {
     fields: [
       { key:'Tanggal', label:'Tanggal', type:'date', required:true, default: () => new Date().toISOString().slice(0,10) },
       { key:'SiswaID', label:'Siswa', type:'select-siswa', required:true, full:true },
-      { key:'JenisPelanggaran', label:'Jenis Pelanggaran', type:'text', required:true },
+      { key:'JenisPelanggaran', label:'Jenis Pelanggaran', type:'select-jenis-pelanggaran', required:true, full:true },
       { key:'Poin', label:'Poin Pelanggaran', type:'number' },
       { key:'Keterangan', label:'Keterangan', type:'textarea', full:true },
       { key:'Penanganan', label:'Penanganan', type:'textarea', full:true }
@@ -792,10 +1357,11 @@ const FORM_CONFIG = {
       { key:'Tanggal', label:'Tanggal', type:'date', required:true, default: () => new Date().toISOString().slice(0,10) },
       { key:'SiswaID', label:'Siswa', type:'select-siswa', required:true, full:true },
       { key:'Topik', label:'Topik', type:'text', required:true },
-      { key:'Konselor', label:'Konselor / Guru BK', type:'text' },
+      { key:'Konselor', label:'Konselor / Guru BK', type:'text', default: () => (USER_ROLE === 'konselor' ? KONSELOR_NAMA : '') },
       { key:'Masalah', label:'Uraian Masalah', type:'textarea', full:true },
       { key:'HasilKonseling', label:'Hasil Konseling', type:'textarea', full:true },
-      { key:'TindakLanjut', label:'Rencana Tindak Lanjut', type:'textarea', full:true }
+      { key:'TindakLanjut', label:'Rencana Tindak Lanjut', type:'textarea', full:true },
+      { key:'TTD', label:'Tanda Tangan / Paraf Siswa', type:'signature-pad', full:true }
     ]
   },
   kolaborasi: {
@@ -804,30 +1370,11 @@ const FORM_CONFIG = {
       { key:'Tanggal', label:'Tanggal', type:'date', required:true, default: () => new Date().toISOString().slice(0,10) },
       { key:'SiswaID', label:'Siswa', type:'select-siswa', required:true, full:true },
       { key:'Jenis', label:'Jenis Kegiatan', type:'select', options:['Pemanggilan Orang Tua','Home Visit'], required:true },
-      { key:'Petugas', label:'Petugas BK', type:'text' },
+      { key:'NamaOrtuWali', label:'Nama Orang Tua / Wali', type:'text', placeholder:'Terisi otomatis dari data siswa, bisa diubah (mis. wali)' },
+      { key:'Petugas', label:'Petugas BK', type:'text', default: () => (USER_ROLE === 'konselor' ? KONSELOR_NAMA : '') },
       { key:'Tujuan', label:'Tujuan Kegiatan', type:'textarea', full:true },
-      { key:'Hasil', label:'Hasil / Kesepakatan', type:'textarea', full:true }
-    ]
-  },
-  kebiasaan: {
-    title: '7 Kebiasaan Anak Indonesia Hebat',
-    fields: [
-      { key:'Tanggal', label:'Hari, Tanggal', type:'date', required:true, default: () => new Date().toISOString().slice(0,10) },
-      { key:'SiswaID', label:'Siswa', type:'select-siswa', required:true, full:true },
-      { key:'BangunPagiPukul', label:'1. Bangun Pagi — Pukul', type:'text', placeholder:'contoh: 05.00' },
-      { key:'IbadahSholat', label:'2. Beribadah — Sholat', type:'checkbox-group', options:['Subuh','Duhur','Ashar','Maghrib',"Isya'"], full:true },
-      { key:'IbadahDhuha', label:'Sholat Dhuha', type:'checkbox' },
-      { key:'IbadahTadarus', label:'Tadarus / Murajaah', type:'text', placeholder:'contoh: Juz 5 / Surah Al-Kahfi' },
-      { key:'IbadahLainnya', label:'Ibadah Lainnya', type:'text', full:true },
-      { key:'OlahragaJenis', label:'3. Berolahraga — Jenis', type:'text' },
-      { key:'OlahragaDurasi', label:'Durasi (menit)', type:'text' },
-      { key:'BelajarMapel', label:'4. Gemar Belajar — Mapel', type:'text', full:true },
-      { key:'MakanMenu', label:'5. Makan Sehat dan Bergizi — Menu', type:'textarea', full:true },
-      { key:'BermasyarakatKegiatan', label:'6. Bermasyarakat — Kegiatan', type:'textarea', full:true },
-      { key:'IstirahatPukul', label:'7. Istirahat Cukup — Pukul', type:'text' },
-      { key:'ParafOrtu', label:'Paraf Orang Tua (sudah diperiksa)', type:'checkbox' },
-      { key:'ParafGuru', label:'Paraf Guru (sudah diperiksa)', type:'checkbox' },
-      { key:'CatatanGuru', label:'Catatan Guru', type:'textarea', full:true }
+      { key:'Hasil', label:'Hasil / Kesepakatan', type:'textarea', full:true },
+      { key:'BuktiFoto', label:'Bukti Foto Home Visit', type:'photo-buktihomevisit', full:true }
     ]
   }
 };
@@ -843,54 +1390,59 @@ function openForm(type, id, prefill){
       : (prefill && prefill[f.key] !== undefined ? prefill[f.key]
       : (typeof f.default==='function' ? f.default() : ''));
     const wrapClass = 'field' + (f.full ? ' full' : '');
-    if (f.type === 'select'){
+    if (f.type === 'select-jenis-pelanggaran'){
+      const master = (STATE.masterPelanggaran||[]).slice().sort((a,b)=>(a.JenisPelanggaran||'').localeCompare(b.JenisPelanggaran||''));
+      const matched = master.find(m => m.JenisPelanggaran === val);
+      const isCustom = !!val && !matched;
       return `<div class="${wrapClass}"><label>${f.label}</label>
-        <select name="${f.key}" ${f.required?'required':''}>
-          <option value="">Pilih...</option>
-          ${f.options.map(o=>`<option value="${o}" ${o===val?'selected':''}>${o}</option>`).join('')}
-        </select></div>`;
-    }
-    if (f.type === 'select-siswa'){
-      const selSiswa = val ? siswaById(val) : null;
-      const displayVal = selSiswa ? `${selSiswa.Nama} — ${selSiswa.Kelas||'-'}` : '';
-      const kelasOpts = uniqueClasses().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-      return `<div class="${wrapClass}"><label>${f.label}</label>
-        <div class="siswa-picker">
-          <div class="siswa-picker-row">
-            <select class="siswa-picker-kelas" title="Filter kelas"><option value="">Semua Kelas</option>${kelasOpts}</select>
-            <input type="text" class="siswa-picker-input" autocomplete="off" placeholder="Ketik nama, NIS, atau kelas siswa..." value="${escapeHtml(displayVal)}" />
-          </div>
+        <div class="jenis-pelanggaran-picker">
+          <select class="jenis-pelanggaran-select" ${master.length ? '' : 'disabled'}>
+            <option value="">${master.length ? 'Pilih jenis pelanggaran...' : 'Belum ada Template Pelanggaran'}</option>
+            ${master.map(m => `<option value="${escapeHtml(m.JenisPelanggaran)}" data-poin="${escapeHtml(String(m.Poin ?? ''))}" ${m.JenisPelanggaran===val?'selected':''}>${escapeHtml(m.JenisPelanggaran)} (${escapeHtml(String(m.Poin ?? 0))} poin)</option>`).join('')}
+            <option value="__custom__" ${isCustom?'selected':''}>+ Jenis lainnya (ketik manual)</option>
+          </select>
+          <input type="text" class="jenis-pelanggaran-custom${isCustom?'':' hidden'}" placeholder="Ketik jenis pelanggaran lainnya..." value="${isCustom?escapeHtml(val):''}" />
           <input type="hidden" name="${f.key}" value="${escapeHtml(val||'')}" />
-          <div class="siswa-picker-dropdown search-dropdown"></div>
-        </div></div>`;
-    }
-    if (f.type === 'textarea'){
-      return `<div class="${wrapClass}"><label>${f.label}</label><textarea name="${f.key}">${escapeHtml(val||'')}</textarea></div>`;
-    }
-    if (f.type === 'checkbox-group'){
-      const selected = (val||'').split(',').map(s=>s.trim());
-      return `<div class="${wrapClass}"><label>${f.label}</label>
-        <div class="checkbox-group">
-          ${f.options.map(o => `<label class="checkbox-pill"><input type="checkbox" name="${f.key}" value="${o}" ${selected.includes(o)?'checked':''}/> ${o}</label>`).join('')}
-        </div></div>`;
-    }
-    if (f.type === 'checkbox'){
-      const checked = habitDone(val);
-      return `<div class="${wrapClass} field--checkbox"><label class="checkbox-pill"><input type="checkbox" name="${f.key}" value="Ya" ${checked?'checked':''}/> ${f.label}</label></div>`;
-    }
-    if (f.type === 'photo'){
-      return `<div class="${wrapClass} field-photo">
-        <label>${f.label}</label>
-        <div class="photo-upload" id="photoUpload_${f.key}">
-          <div class="photo-preview" id="photoPreview_${f.key}">${val ? `<img src="${escapeHtml(val)}" alt="Foto siswa" />` : `<i class="fa-solid fa-user"></i>`}</div>
-          <div class="photo-actions">
-            <input type="file" accept="image/*" capture="environment" class="hidden photo-file-input" id="photoFile_${f.key}" />
-            <button type="button" class="btn btn-ghost btn-sm photo-pick-btn" data-photo-key="${f.key}"><i class="fa-solid fa-camera"></i> Ambil / Upload Foto</button>
-            ${val ? `<button type="button" class="btn btn-ghost btn-sm photo-remove-btn" data-photo-key="${f.key}"><i class="fa-solid fa-trash"></i> Hapus</button>` : ''}
-          </div>
-          <p class="photo-hint muted">Foto otomatis dikompres &amp; disimpan langsung di Google Sheet (tanpa Google Drive).</p>
         </div>
-        <input type="hidden" name="${f.key}" value="${escapeHtml(val||'')}" />
+        <p class="muted" style="margin-top:6px;font-size:11.5px">Daftar bisa diatur lewat tombol "Template Pelanggaran" di halaman Pelanggaran.</p>
+      </div>`;
+    }
+    if (f.type === 'photo-buktihomevisit'){
+      const hasPhoto = !!val;
+      // Field ini cuma relevan untuk Jenis = "Home Visit" — dicek dari data yang sudah
+      // ada (mode edit) atau prefill, supaya kalau sedang mengedit catatan Home Visit,
+      // field foto langsung kelihatan tanpa harus ganti-ganti dropdown Jenis dulu.
+      const jenisVal = existing ? (existing.Jenis || '') : (prefill && prefill.Jenis !== undefined ? prefill.Jenis : '');
+      const showNow = jenisVal === 'Home Visit';
+      return `<div class="${wrapClass} bukti-foto-wrap" data-bukti-foto-wrap style="${showNow ? '' : 'display:none'}">
+        <label>${f.label}</label>
+        <div class="logo-upload-row">
+          <div class="logo-preview bukti-foto-preview-wrap" style="width:90px;height:90px">
+            ${hasPhoto ? `<img src="${escapeHtml(val)}" alt="Bukti Foto" />` : `<i class="fa-solid fa-camera"></i>`}
+          </div>
+          <div class="logo-upload-actions">
+            <input type="file" class="hidden bukti-foto-file" accept="image/*" />
+            <button class="btn btn-ghost bukti-foto-btn" type="button"><i class="fa-solid fa-upload"></i> ${hasPhoto?'Ganti Foto':'Upload Foto'}</button>
+            <button class="btn btn-ghost bukti-foto-remove-btn" type="button" style="${hasPhoto?'':'display:none'}"><i class="fa-solid fa-trash"></i> Hapus</button>
+          </div>
+        </div>
+        <input type="hidden" name="${f.key}" class="bukti-foto-hidden" value="${escapeHtml(val||'')}" />
+        <p class="muted" style="margin-top:6px;font-size:11.5px">Sebagai bukti kunjungan Home Visit sudah dilaksanakan. Foto otomatis diperkecil &amp; dikompres.</p>
+      </div>`;
+    }
+    if (f.type === 'signature-pad'){
+      const hasSig = !!val;
+      return `<div class="${wrapClass} signature-wrap" data-signature-wrap>
+        <label>${f.label}</label>
+        <div class="signature-pad-box">
+          <canvas class="signature-canvas"></canvas>
+          <span class="signature-placeholder" style="${hasSig ? 'display:none' : ''}">Tanda tangan / paraf di sini...</span>
+        </div>
+        <div class="signature-actions">
+          <button class="btn btn-ghost signature-clear-btn" type="button"><i class="fa-solid fa-eraser"></i> Hapus</button>
+        </div>
+        <input type="hidden" name="${f.key}" class="signature-hidden" value="${escapeHtml(val||'')}" />
+        <p class="muted" style="margin-top:6px;font-size:11.5px">Minta siswa tanda tangan atau paraf di kotak ini setelah sesi konseling selesai. TTD ini akan ikut tampil di Laporan, di sebelah Rencana Tindak Lanjut.</p>
       </div>`;
     }
     if (f.type === 'barcode'){
@@ -907,6 +1459,30 @@ function openForm(type, id, prefill){
         <p class="muted photo-hint">Tempel/cetak kode QR ini di kartu siswa. Saat kartu ditunjukkan ke kamera di menu Absensi, siswa otomatis tercatat hadir.</p>
       </div>`;
     }
+    if (f.type === 'select'){
+      return `<div class="${wrapClass}"><label>${f.label}</label>
+        <select name="${f.key}" ${f.required?'required':''}>
+          <option value="">Pilih...</option>
+          ${f.options.map(o=>`<option value="${o}" ${o===val?'selected':''}>${o}</option>`).join('')}
+        </select></div>`;
+    }
+    if (f.type === 'select-siswa'){
+      const selSiswa = val ? siswaById(val) : null;
+      const displayVal = selSiswa ? `${selSiswa.Nama} — ${selSiswa.Kelas||'-'}` : '';
+      const kelasOpts = writableKelasList().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      return `<div class="${wrapClass}"><label>${f.label}</label>
+        <div class="siswa-picker">
+          <div class="siswa-picker-row">
+            <select class="siswa-picker-kelas" title="Filter kelas"><option value="">Semua Kelas</option>${kelasOpts}</select>
+            <input type="text" class="siswa-picker-input" autocomplete="off" placeholder="Ketik nama, NIS, atau kelas siswa..." value="${escapeHtml(displayVal)}" />
+          </div>
+          <input type="hidden" name="${f.key}" value="${escapeHtml(val||'')}" />
+          <div class="siswa-picker-dropdown search-dropdown"></div>
+        </div></div>`;
+    }
+    if (f.type === 'textarea'){
+      return `<div class="${wrapClass}"><label>${f.label}</label><textarea name="${f.key}">${escapeHtml(val||'')}</textarea></div>`;
+    }
     return `<div class="${wrapClass}"><label>${f.label}</label><input type="${f.type}" name="${f.key}" value="${escapeHtml(val||'')}" ${f.placeholder?`placeholder="${escapeHtml(f.placeholder)}"`:''} ${f.required?'required':''} /></div>`;
   }).join('');
 
@@ -919,8 +1495,8 @@ function openForm(type, id, prefill){
       </div>
     </form>`;
 
+  initSignaturePads();
   $all('.field-barcode', $('#modalBody')).forEach(refreshBarcodePreview);
-
   $('#formCancel').addEventListener('click', closeModal);
   $('#entityForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -935,8 +1511,14 @@ function openForm(type, id, prefill){
       const s = siswaById(data.SiswaID);
       if (s){ data.Nama = s.Nama; data.Kelas = s.Kelas; }
     }
+    // Kalau Jenis Kegiatan bukan Home Visit, jangan ikut kirim foto (mis. sisa upload
+    // sebelum pengguna berganti pikiran memilih Jenis lain) — supaya tidak menyimpan
+    // data foto yang tidak relevan dengan Pemanggilan Orang Tua.
+    if (type === 'kolaborasi' && data.Jenis !== 'Home Visit'){ data.BuktiFoto = ''; }
     const missingSiswa = cfg.fields.find(f => f.type === 'select-siswa' && f.required && !data[f.key]);
     if (missingSiswa){ toast(`${missingSiswa.label} wajib dipilih — ketik nama lalu klik salah satu hasil.`, 'error'); return; }
+    const missingJenis = cfg.fields.find(f => f.type === 'select-jenis-pelanggaran' && f.required && !data[f.key]);
+    if (missingJenis){ toast(`${missingJenis.label} wajib dipilih atau diisi.`, 'error'); return; }
     showLoading(true);
     try{
       if (existing){
@@ -950,8 +1532,9 @@ function openForm(type, id, prefill){
         toast('Data berhasil disimpan.', 'success');
       }
       closeModal();
-      try{ populateClassFilters(); renderCurrentPage(); renderDashboard(); }
-      catch(renderErr){ console.warn('Data tersimpan, tapi gagal me-refresh tampilan:', renderErr); }
+      populateClassFilters();
+      renderCurrentPage();
+      renderDashboard();
     }catch(err){
       toast(err.message, 'error');
     }finally{
@@ -965,96 +1548,12 @@ function openForm(type, id, prefill){
 function openModal(){ $('#modalBackdrop').classList.add('open'); }
 function closeModal(){ $('#modalBackdrop').classList.remove('open'); }
 
-/* ---------------- AVATAR (pakai foto siswa kalau ada, kalau tidak pakai inisial berwarna) ---------------- */
+/* Avatar inisial siswa (dipakai di daftar Cetak Kartu QR & layar Mode Kamera). */
 function avatarHtmlFor(s, size){
   size = size || 30;
-  if (s && s.FotoURL){
-    return `<img src="${escapeHtml(s.FotoURL)}" alt="${escapeHtml(s.Nama||'')}" class="avatar-ring avatar-photo" style="width:${size}px;height:${size}px;object-fit:cover;" />`;
-  }
   const nama = s ? s.Nama : '';
   return `<span class="avatar-ring" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.36)}px;background:${colorFromString(nama)}">${escapeHtml(initials(nama))}</span>`;
 }
-
-/* ---------------- UPLOAD & KOMPRESI FOTO SISWA ----------------
-   Foto di-resize & dikompres di browser (canvas) supaya cukup kecil untuk
-   disimpan langsung sebagai teks (data URL base64) di dalam sel Google
-   Sheet — tidak perlu Google Drive / server tambahan sama sekali. Kualitas
-   otomatis diturunkan bertahap kalau hasilnya masih terlalu besar. */
-function compressImageToDataUrl(file, maxW, maxH, quality){
-  return new Promise((resolve, reject) => {
-    if (!file.type || !file.type.startsWith('image/')){ reject(new Error('File yang dipilih bukan gambar.')); return; }
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Gagal membaca file foto.'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('File bukan gambar yang valid.'));
-      img.onload = () => {
-        let width = img.naturalWidth, height = img.naturalHeight;
-        const ratio = Math.min(maxW / width, maxH / height, 1);
-        width = Math.max(1, Math.round(width * ratio));
-        height = Math.max(1, Math.round(height * ratio));
-        const canvas = document.createElement('canvas');
-        canvas.width = width; canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        let q = quality;
-        let dataUrl = canvas.toDataURL('image/jpeg', q);
-        while (dataUrl.length > 42000 && q > 0.25){
-          q -= 0.1;
-          dataUrl = canvas.toDataURL('image/jpeg', q);
-        }
-        if (dataUrl.length > 48000){ reject(new Error('Ukuran foto masih terlalu besar setelah dikompres. Coba foto lain.')); return; }
-        resolve(dataUrl);
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function setPhotoValue(key, dataUrl){
-  const wrap = $(`#photoUpload_${key}`);
-  if (!wrap) return;
-  const hidden = wrap.parentElement.querySelector(`input[type=hidden][name="${key}"]`);
-  if (hidden) hidden.value = dataUrl || '';
-  const preview = $(`#photoPreview_${key}`);
-  if (preview) preview.innerHTML = dataUrl ? `<img src="${escapeHtml(dataUrl)}" alt="Foto siswa" />` : `<i class="fa-solid fa-user"></i>`;
-  const actions = wrap.querySelector('.photo-actions');
-  let removeBtn = wrap.querySelector('.photo-remove-btn');
-  if (dataUrl && !removeBtn && actions){
-    removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'btn btn-ghost btn-sm photo-remove-btn';
-    removeBtn.dataset.photoKey = key;
-    removeBtn.innerHTML = '<i class="fa-solid fa-trash"></i> Hapus';
-    actions.appendChild(removeBtn);
-  } else if (!dataUrl && removeBtn){
-    removeBtn.remove();
-  }
-}
-
-document.addEventListener('click', e => {
-  const pickBtn = e.target.closest('.photo-pick-btn');
-  if (pickBtn){ $(`#photoFile_${pickBtn.dataset.photoKey}`)?.click(); return; }
-  const rmBtn = e.target.closest('.photo-remove-btn');
-  if (rmBtn){ setPhotoValue(rmBtn.dataset.photoKey, ''); return; }
-});
-document.addEventListener('change', async e => {
-  if (!e.target.classList.contains('photo-file-input')) return;
-  const file = e.target.files[0];
-  const key = e.target.id.replace('photoFile_', '');
-  if (!file) return;
-  showLoading(true);
-  try{
-    const dataUrl = await compressImageToDataUrl(file, 280, 280, 0.75);
-    setPhotoValue(key, dataUrl);
-  }catch(err){
-    toast(err.message, 'error');
-  }finally{
-    showLoading(false);
-    e.target.value = '';
-  }
-});
 
 /* ---------------- KODE QR SISWA (generate + preview + cetak kartu) ----------------
    Sebelumnya pakai barcode batang (CODE128) tapi seringkali sulit terbaca kamera HP/webcam
@@ -1150,8 +1649,8 @@ function printBarcodeCard(code, nama, kelas, nis){
 function openBulkBarcodePrint(){
   $('#modalTitle').textContent = 'Cetak Kartu QR (Massal)';
   const kelasOpts = uniqueClasses().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-  const savedSchool = localStorage.getItem('bk_school_name') || '';
-  const savedYear = localStorage.getItem('bk_school_year') || '';
+  const savedSchool = SCHOOL_NAME || localStorage.getItem('bk_school_name') || '';
+  const savedYear = SCHOOL_YEAR || localStorage.getItem('bk_school_year') || '';
   const esc = escapeHtml;
 
   $('#modalBody').innerHTML = `
@@ -1219,8 +1718,6 @@ function openBulkBarcodePrint(){
     if (!ids.length){ toast('Pilih minimal satu siswa terlebih dahulu.', 'error'); return; }
     const schoolName = $('#bcpSekolah').value.trim();
     const schoolYear = $('#bcpTahun').value.trim();
-    localStorage.setItem('bk_school_name', schoolName);
-    localStorage.setItem('bk_school_year', schoolYear);
 
     showLoading(true);
     try{
@@ -1271,7 +1768,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
         <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR</div>
       </div>
       <div class="card-body">
-        <div class="card-photo">${s.FotoURL ? `<img src="${safe(s.FotoURL)}" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
+        <div class="card-photo"><span>${safe(initials(s.Nama))}</span></div>
         <div class="card-info">
           <div class="card-nama">${safe(s.Nama) || '-'}</div>
           <div class="card-meta">Kelas ${safe(s.Kelas) || '-'}</div>
@@ -1324,120 +1821,6 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     </body></html>`);
   w.document.close();
 }
-
-/* ---------------- ABSEN MASSAL PER KELAS ----------------
-   Fitur tambahan di halaman Absensi: centang beberapa siswa sekaligus (mis. satu
-   kelas masuk semua), pilih satu status, lalu simpan sekaligus. Tidak mengubah
-   tampilan/alur "Catat Absensi" satu-per-satu yang sudah ada — ini murni tombol
-   tambahan di sebelahnya. */
-function openBulkAbsensi(){
-  $('#modalTitle').textContent = 'Absen Massal per Kelas';
-  const today = new Date().toISOString().slice(0,10);
-  const kelasOpts = uniqueClasses().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-
-  $('#modalBody').innerHTML = `
-    <form id="bulkAbsensiForm">
-      <div class="form-grid">
-        <div class="field"><label>Tanggal</label><input type="date" id="bulkTanggal" value="${today}" required /></div>
-        <div class="field"><label>Kelas</label>
-          <select id="bulkKelas" required><option value="">Pilih kelas...</option>${kelasOpts}</select>
-        </div>
-        <div class="field"><label>Status untuk siswa yang dicentang</label>
-          <select id="bulkStatus" required>
-            <option value="">Pilih...</option>
-            <option value="Hadir">Hadir</option>
-            <option value="Sakit">Sakit</option>
-            <option value="Izin">Izin</option>
-            <option value="Alpa">Alpa</option>
-          </select>
-        </div>
-        <div class="field"><label>Keterangan (opsional, berlaku untuk semua yang dicentang)</label>
-          <input type="text" id="bulkKeterangan" placeholder="Contoh: -" />
-        </div>
-      </div>
-      <div class="bulk-list-head">
-        <label class="checkbox-pill"><input type="checkbox" id="bulkCheckAll" /> Pilih Semua</label>
-        <span class="muted" id="bulkCount">Pilih kelas dahulu untuk menampilkan daftar siswa.</span>
-      </div>
-      <div class="bulk-siswa-list" id="bulkSiswaList"></div>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-ghost" id="bulkCancel">Batal</button>
-        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i> Simpan Semua</button>
-      </div>
-    </form>`;
-
-  function updateBulkCount(){
-    const total = $all('.bulk-siswa-check').length;
-    const checked = $all('.bulk-siswa-check:checked').length;
-    $('#bulkCount').textContent = total ? `${checked} dari ${total} siswa dicentang` : 'Pilih kelas dahulu untuk menampilkan daftar siswa.';
-  }
-  function renderBulkList(kelas){
-    const list = $('#bulkSiswaList');
-    const siswaKelas = STATE.siswa.filter(s => s.Kelas === kelas).sort((a,b)=>(a.Nama||'').localeCompare(b.Nama||''));
-    if (!siswaKelas.length){
-      list.innerHTML = `<p class="muted">Tidak ada data siswa untuk kelas ini.</p>`;
-      $('#bulkCheckAll').checked = false;
-      updateBulkCount();
-      return;
-    }
-    list.innerHTML = siswaKelas.map(s => `
-      <label class="checkbox-pill bulk-item">
-        <input type="checkbox" class="bulk-siswa-check" value="${escapeHtml(s.ID)}" checked />
-        <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
-        <span>${escapeHtml(s.Nama)} <span class="muted">· NIS ${escapeHtml(s.NIS||'-')}</span></span>
-      </label>`).join('');
-    $('#bulkCheckAll').checked = true;
-    updateBulkCount();
-  }
-
-  $('#bulkKelas').addEventListener('change', e => renderBulkList(e.target.value));
-  $('#bulkCheckAll').addEventListener('change', e => {
-    $all('.bulk-siswa-check').forEach(cb => cb.checked = e.target.checked);
-    updateBulkCount();
-  });
-  $('#bulkSiswaList').addEventListener('change', e => {
-    if (e.target.classList.contains('bulk-siswa-check')) updateBulkCount();
-  });
-  $('#bulkCancel').addEventListener('click', closeModal);
-
-  $('#bulkAbsensiForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const tanggal = $('#bulkTanggal').value;
-    const kelas = $('#bulkKelas').value;
-    const status = $('#bulkStatus').value;
-    const keterangan = $('#bulkKeterangan').value || '';
-    if (!tanggal || !kelas || !status){ toast('Tanggal, kelas, dan status wajib diisi.', 'error'); return; }
-    const checkedIds = $all('.bulk-siswa-check:checked').map(cb => cb.value);
-    if (!checkedIds.length){ toast('Centang minimal satu siswa.', 'error'); return; }
-
-    showLoading(true);
-    let saved = 0, skipped = 0;
-    try{
-      for (const id of checkedIds){
-        const already = STATE.absensi.some(a => String(a.SiswaID)===String(id) && a.Tanggal===tanggal);
-        if (already){ skipped++; continue; }
-        const s = siswaById(id);
-        const data = { Tanggal: tanggal, SiswaID: id, Nama: s?.Nama||'', Kelas: s?.Kelas||'', Status: status, Keterangan: keterangan };
-        const created = await adapter.create('absensi', data);
-        STATE.absensi.push({ ...data, ...created });
-        saved++;
-      }
-      closeModal();
-      try{ populateClassFilters(); renderCurrentPage(); renderDashboard(); }
-      catch(renderErr){ console.warn('Absensi massal tersimpan, tapi gagal me-refresh tampilan:', renderErr); }
-      toast(`${saved} siswa dicatat sebagai ${status}${skipped ? `, ${skipped} dilewati (sudah ada catatan absensi tanggal ini)` : ''}.`, 'success');
-    }catch(err){
-      toast(err.message, 'error');
-    }finally{
-      showLoading(false);
-    }
-  });
-
-  openModal();
-}
-$('#btnBulkAbsensi').addEventListener('click', openBulkAbsensi);
-$('#modalClose').addEventListener('click', closeModal);
-$('#modalBackdrop').addEventListener('click', e => { if (e.target.id==='modalBackdrop') closeModal(); });
 
 /* ---------------- KIOSK ABSENSI KAMERA (scan kartu QR) ----------------
    Alur: kamera nyala & standby menunggu kartu QR → siswa tunjukkan
@@ -1586,7 +1969,7 @@ async function handleKioskScan(code){
 
   const today = new Date().toISOString().slice(0,10);
   const already = STATE.absensi.find(a => String(a.SiswaID) === String(s.ID) && a.Tanggal === today);
-  const photoHtml = avatarHtmlFor(s, 108).replace('avatar-ring', 'avatar-ring kiosk-photo');
+  const photoHtml = avatarHtmlFor(s, 100).replace('avatar-ring', 'avatar-ring kiosk-photo');
 
   if (already){
     playKioskBeep('error');
@@ -1668,44 +2051,390 @@ if (kioskManualInput) kioskManualInput.addEventListener('keydown', e => {
   if (e.key === 'Enter'){ e.preventDefault(); submitKioskManual(); }
 });
 
+/* ---------------- ABSEN MASSAL PER KELAS ----------------
+   Fitur tambahan di halaman Absensi: centang beberapa siswa sekaligus (mis. satu
+   kelas masuk semua), pilih satu status, lalu simpan sekaligus. Tidak mengubah
+   tampilan/alur "Catat Absensi" satu-per-satu yang sudah ada — ini murni tombol
+   tambahan di sebelahnya. */
+function bulkAbsensiAllowedKelas(){
+  const all = uniqueClasses();
+  if (USER_ROLE !== 'konselor' || !KONSELOR_KELAS.length) return all;
+  const own = KONSELOR_KELAS.map(k => String(k).trim().toLowerCase());
+  return all.filter(c => own.includes(String(c).trim().toLowerCase()));
+}
+function openBulkAbsensi(){
+  $('#modalTitle').textContent = 'Absen Massal per Kelas';
+  const today = new Date().toISOString().slice(0,10);
+  // Konselor hanya boleh absen massal di kelas tanggung jawabnya (kosong = semua kelas).
+  // Server juga menegakkan ini, jadi ini hanya merapikan pilihan di tampilan.
+  const allowedKelas = bulkAbsensiAllowedKelas();
+  const kelasOpts = allowedKelas.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+
+  $('#modalBody').innerHTML = `
+    <form id="bulkAbsensiForm">
+      <div class="form-grid">
+        <div class="field"><label>Tanggal</label><input type="date" id="bulkTanggal" value="${today}" required /></div>
+        <div class="field"><label>Kelas</label>
+          <select id="bulkKelas" required><option value="">Pilih kelas...</option>${kelasOpts}</select>
+        </div>
+        <div class="field"><label>Status untuk siswa yang dicentang</label>
+          <select id="bulkStatus" required>
+            <option value="">Pilih...</option>
+            <option value="Hadir">Hadir</option>
+            <option value="Sakit">Sakit</option>
+            <option value="Izin">Izin</option>
+            <option value="Alpa">Alpa</option>
+          </select>
+        </div>
+        <div class="field"><label>Keterangan (opsional, berlaku untuk semua yang dicentang)</label>
+          <input type="text" id="bulkKeterangan" placeholder="Contoh: -" />
+        </div>
+      </div>
+      <div class="bulk-list-head">
+        <label class="checkbox-pill"><input type="checkbox" id="bulkCheckAll" /> Pilih Semua</label>
+        <span class="muted" id="bulkCount">Pilih kelas dahulu untuk menampilkan daftar siswa.</span>
+      </div>
+      <div class="bulk-siswa-list" id="bulkSiswaList"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="bulkCancel">Batal</button>
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i> Simpan Semua</button>
+      </div>
+    </form>`;
+
+  function updateBulkCount(){
+    const total = $all('.bulk-siswa-check').length;
+    const checked = $all('.bulk-siswa-check:checked').length;
+    $('#bulkCount').textContent = total ? `${checked} dari ${total} siswa dicentang` : 'Pilih kelas dahulu untuk menampilkan daftar siswa.';
+  }
+  function renderBulkList(kelas){
+    const list = $('#bulkSiswaList');
+    const siswaKelas = STATE.siswa.filter(s => s.Kelas === kelas).sort((a,b)=>(a.Nama||'').localeCompare(b.Nama||''));
+    if (!siswaKelas.length){
+      list.innerHTML = `<p class="muted">Tidak ada data siswa untuk kelas ini.</p>`;
+      $('#bulkCheckAll').checked = false;
+      updateBulkCount();
+      return;
+    }
+    list.innerHTML = siswaKelas.map(s => `
+      <label class="checkbox-pill bulk-item">
+        <input type="checkbox" class="bulk-siswa-check" value="${escapeHtml(s.ID)}" checked />
+        <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+        <span>${escapeHtml(s.Nama)} <span class="muted">· NIS ${escapeHtml(s.NIS||'-')}</span></span>
+      </label>`).join('');
+    $('#bulkCheckAll').checked = true;
+    updateBulkCount();
+  }
+
+  $('#bulkKelas').addEventListener('change', e => renderBulkList(e.target.value));
+  $('#bulkCheckAll').addEventListener('change', e => {
+    $all('.bulk-siswa-check').forEach(cb => cb.checked = e.target.checked);
+    updateBulkCount();
+  });
+  $('#bulkSiswaList').addEventListener('change', e => {
+    if (e.target.classList.contains('bulk-siswa-check')) updateBulkCount();
+  });
+  $('#bulkCancel').addEventListener('click', closeModal);
+
+  $('#bulkAbsensiForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const tanggal = $('#bulkTanggal').value;
+    const kelas = $('#bulkKelas').value;
+    const status = $('#bulkStatus').value;
+    const keterangan = $('#bulkKeterangan').value || '';
+    if (!tanggal || !kelas || !status){ toast('Tanggal, kelas, dan status wajib diisi.', 'error'); return; }
+    if (!bulkAbsensiAllowedKelas().includes(kelas)){ toast('Anda hanya bisa absen massal untuk kelas tanggung jawab Anda.', 'error'); return; }
+    const checkedIds = $all('.bulk-siswa-check:checked').map(cb => cb.value);
+    if (!checkedIds.length){ toast('Centang minimal satu siswa.', 'error'); return; }
+
+    showLoading(true);
+    let saved = 0, skipped = 0;
+    try{
+      const rowsToInsert = [];
+      checkedIds.forEach(id => {
+        const already = STATE.absensi.some(a => String(a.SiswaID)===String(id) && a.Tanggal===tanggal);
+        if (already){ skipped++; return; }
+        const s = siswaById(id);
+        rowsToInsert.push({ Tanggal: tanggal, SiswaID: id, Nama: s?.Nama||'', Kelas: s?.Kelas||'', Status: status, Keterangan: keterangan });
+      });
+      if (rowsToInsert.length){
+        // Satu permintaan untuk semua siswa sekaligus (jauh lebih cepat dibanding satu-satu)
+        const result = await adapter.bulkInsert('absensi', rowsToInsert);
+        const insertedRows = (result && result.rows) || rowsToInsert;
+        STATE.absensi.push(...insertedRows);
+        saved = insertedRows.length;
+      }
+      closeModal();
+      populateClassFilters();
+      renderCurrentPage();
+      renderDashboard();
+      toast(`${saved} siswa dicatat sebagai ${status}${skipped ? `, ${skipped} dilewati (sudah ada catatan absensi tanggal ini)` : ''}.`, 'success');
+    }catch(err){
+      toast(err.message, 'error');
+    }finally{
+      showLoading(false);
+    }
+  });
+
+  openModal();
+}
+$('#btnBulkAbsensi').addEventListener('click', openBulkAbsensi);
+$('#modalClose').addEventListener('click', closeModal);
+$('#modalBackdrop').addEventListener('click', e => { if (e.target.id==='modalBackdrop') closeModal(); });
+
 $('#btnAddSiswa').addEventListener('click', () => openForm('siswa'));
 $('#btnAddAbsensi').addEventListener('click', () => openForm('absensi'));
 $('#btnAddPelanggaran').addEventListener('click', () => openForm('pelanggaran'));
+$('#btnMasterPelanggaran').addEventListener('click', () => openMasterPelanggaran());
+
+/* ---------------- TEMPLATE PELANGGARAN (kelola Jenis Pelanggaran & Poin) ----------------
+   Daftar baku Jenis Pelanggaran + Poin yang dipakai sebagai pilihan dropdown saat
+   mencatat pelanggaran, supaya konsisten antar guru (tidak ketik bebas beda-beda
+   istilah). Sekolah bisa tambah/ubah/hapus daftar ini kapan saja lewat menu ini —
+   mengubah daftar TIDAK mengubah data pelanggaran siswa yang sudah tercatat
+   sebelumnya (karena JenisPelanggaran & Poin disimpan sebagai teks/angka biasa
+   di baris pelanggaran masing-masing siswa, bukan referensi/link ke baris ini). */
+function openMasterPelanggaran(){
+  $('#modalTitle').textContent = 'Template Pelanggaran';
+  let editingId = null;
+
+  $('#modalBody').innerHTML = `
+    <p class="muted" style="margin:0 0 14px">Daftar Jenis Pelanggaran &amp; Poin baku ini akan muncul sebagai pilihan dropdown saat mencatat pelanggaran siswa. Mengubah daftar di sini tidak mengubah data pelanggaran yang sudah pernah dicatat.</p>
+    <form id="masterPelanggaranForm">
+      <div class="form-grid">
+        <div class="field full"><label>Jenis Pelanggaran</label>
+          <input type="text" id="mplJenis" placeholder="Contoh: Terlambat masuk sekolah" required />
+        </div>
+        <div class="field"><label>Poin</label>
+          <input type="number" id="mplPoin" min="0" value="5" required />
+        </div>
+        <div class="field"><label>Kategori</label>
+          <select id="mplKategori">
+            <option value="Ringan">Ringan</option>
+            <option value="Sedang">Sedang</option>
+            <option value="Berat">Berat</option>
+            <option value="Lainnya">Lainnya</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start; margin-bottom:18px">
+        <button type="submit" class="btn btn-primary" id="mplSubmitBtn"><i class="fa-solid fa-plus"></i> Tambah ke Template</button>
+        <button type="button" class="btn btn-ghost hidden" id="mplCancelEditBtn">Batal Edit</button>
+      </div>
+    </form>
+    <div class="bulk-siswa-list" id="mplList" style="max-height:280px"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="mplCloseBtn">Tutup</button>
+    </div>`;
+
+  function renderList(){
+    const list = $('#mplList');
+    const rows = STATE.masterPelanggaran.slice().sort((a,b) => (a.JenisPelanggaran||'').localeCompare(b.JenisPelanggaran||''));
+    if (!rows.length){
+      list.innerHTML = `<p class="muted" style="padding:8px">Belum ada Template Pelanggaran. Tambahkan lewat form di atas.</p>`;
+      return;
+    }
+    list.innerHTML = rows.map(m => `
+      <div class="bulk-item mpl-item">
+        <span class="mpl-info"><b>${escapeHtml(m.JenisPelanggaran||'-')}</b> <span class="muted">· ${escapeHtml(String(m.Poin ?? 0))} poin · ${escapeHtml(m.Kategori||'-')}</span></span>
+        <span class="search-dd-actions">
+          <button type="button" class="icon-btn-sm" data-mpl-edit="${escapeHtml(m.ID)}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+          <button type="button" class="icon-btn-sm danger" data-mpl-del="${escapeHtml(m.ID)}" title="Hapus"><i class="fa-solid fa-trash"></i></button>
+        </span>
+      </div>`).join('');
+  }
+  renderList();
+
+  $('#mplList').addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-mpl-edit]');
+    const delBtn = e.target.closest('[data-mpl-del]');
+    if (editBtn){
+      const m = STATE.masterPelanggaran.find(o => String(o.ID)===String(editBtn.dataset.mplEdit));
+      if (!m) return;
+      editingId = m.ID;
+      $('#mplJenis').value = m.JenisPelanggaran || '';
+      $('#mplPoin').value = m.Poin ?? 5;
+      $('#mplKategori').value = m.Kategori || 'Ringan';
+      $('#mplSubmitBtn').innerHTML = '<i class="fa-solid fa-check"></i> Update Template';
+      $('#mplCancelEditBtn').classList.remove('hidden');
+      $('#mplJenis').focus();
+      return;
+    }
+    if (delBtn){
+      if (!confirm('Hapus jenis pelanggaran ini dari Template? Data pelanggaran siswa yang sudah tercatat sebelumnya tidak akan terhapus.')) return;
+      const id = delBtn.dataset.mplDel;
+      try{
+        await adapter.delete('masterPelanggaran', id);
+        STATE.masterPelanggaran = STATE.masterPelanggaran.filter(o => String(o.ID)!==String(id));
+        renderList();
+        toast('Template pelanggaran dihapus.', 'success');
+      }catch(err){
+        toast(err.message, 'error');
+      }
+    }
+  });
+
+  $('#mplCancelEditBtn').addEventListener('click', () => {
+    editingId = null;
+    $('#masterPelanggaranForm').reset();
+    $('#mplPoin').value = 5;
+    $('#mplSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah ke Template';
+    $('#mplCancelEditBtn').classList.add('hidden');
+  });
+
+  $('#masterPelanggaranForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const jenis = $('#mplJenis').value.trim();
+    const poin = Number($('#mplPoin').value || 0);
+    const kategori = $('#mplKategori').value;
+    if (!jenis){ toast('Jenis Pelanggaran wajib diisi.', 'error'); return; }
+    const btn = $('#mplSubmitBtn');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+    try{
+      const data = { JenisPelanggaran: jenis, Poin: poin, Kategori: kategori };
+      if (editingId){
+        const updated = await adapter.update('masterPelanggaran', editingId, data);
+        const idx = STATE.masterPelanggaran.findIndex(o => String(o.ID)===String(editingId));
+        if (idx > -1) STATE.masterPelanggaran[idx] = { ...STATE.masterPelanggaran[idx], ...updated, ...data, ID: editingId };
+        toast('Template pelanggaran diperbarui.', 'success');
+      } else {
+        const created = await adapter.create('masterPelanggaran', data);
+        STATE.masterPelanggaran.push({ ...data, ...created });
+        toast('Ditambahkan ke Template Pelanggaran.', 'success');
+      }
+      editingId = null;
+      $('#masterPelanggaranForm').reset();
+      $('#mplPoin').value = 5;
+      $('#mplSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah ke Template';
+      $('#mplCancelEditBtn').classList.add('hidden');
+      renderList();
+    }catch(err){
+      toast(err.message, 'error');
+    }finally{
+      btn.disabled = false;
+    }
+  });
+
+  $('#mplCloseBtn').addEventListener('click', closeModal);
+  openModal();
+}
 $('#btnAddKonseling').addEventListener('click', () => openForm('konseling'));
 $('#btnAddKolaborasi').addEventListener('click', () => openForm('kolaborasi'));
-$('#btnAddKebiasaan').addEventListener('click', () => openForm('kebiasaan'));
 
 /* ---------------- LAPORAN / CETAK PDF ---------------- */
 const REPORT_COLUMNS = {
   siswa: ['NIS','Nama','Kelas','JenisKelamin','NamaOrtu','NoHPOrtu'],
   absensi: ['Tanggal','Nama','Kelas','Status','Keterangan'],
   pelanggaran: ['Tanggal','Nama','Kelas','JenisPelanggaran','Poin','Penanganan'],
-  konseling: ['Tanggal','Nama','Kelas','Topik','HasilKonseling','TindakLanjut'],
-  kolaborasi: ['Tanggal','Nama','Kelas','Jenis','Tujuan','Hasil'],
-  kebiasaan: ['Tanggal','Nama','Kelas','BangunPagiPukul','IbadahSholat','OlahragaJenis','BelajarMapel','IstirahatPukul']
+  konseling: ['Tanggal','Nama','Kelas','Topik','HasilKonseling','TindakLanjut','TTD'],
+  kolaborasi: ['Tanggal','Nama','Kelas','Jenis','NamaOrtuWali','Tujuan','Hasil'],
+  pemanggilan_ortu: ['Tanggal','Nama','Kelas','NamaOrtuWali','Tujuan','Hasil','Petugas'],
+  home_visit: ['Tanggal','Nama','Kelas','NamaOrtuWali','Tujuan','Hasil','Petugas'],
+  siswa_lulus: ['NIS','Nama','Kelas','JenisKelamin','NamaOrtu','NoHPOrtu','TahunLulus','TanggalLulus']
 };
 const REPORT_TITLES = {
   siswa:'Data Siswa', absensi:'Rekap Absensi Siswa', pelanggaran:'Rekap Pelanggaran Siswa',
   konseling:'Rekap Sesi Konseling', kolaborasi:'Rekap Kolaborasi (Panggilan Ortu / Home Visit)',
-  kebiasaan:'Rekap 7 Kebiasaan Anak Indonesia Hebat'
+  pemanggilan_ortu:'Rekap Pemanggilan Orang Tua', home_visit:'Rekap Home Visit',
+  siswa_lulus:'Laporan Siswa Lulus (Alumni)'
 };
 
 $('#reportPeriode').addEventListener('change', () => {
   const val = $('#reportPeriode').value;
   $('#reportTanggalField').classList.toggle('hidden', val !== 'harian');
   $('#reportBulanField').classList.toggle('hidden', val !== 'bulanan');
+  $('#reportSemesterField').classList.toggle('hidden', val !== 'semester');
+  $('#reportTahunAjaranField').classList.toggle('hidden', val !== 'semester');
+  if (val === 'semester' && !$('#reportTahunAjaran').value.trim()){
+    $('#reportTahunAjaran').value = SCHOOL_YEAR || '';
+  }
 });
 $('#reportType').addEventListener('change', () => {
   const isIndividu = $('#reportType').value === 'individu';
+  const isLulus = $('#reportType').value === 'siswa_lulus';
+  $('#reportTahunLulusField').classList.toggle('hidden', !isLulus);
+  $('#reportPeriodeField').classList.toggle('hidden', isLulus);
+  if (isLulus){ ['Tanggal','Bulan','Semester','TahunAjaran'].forEach(k => $(`#report${k}Field`).classList.add('hidden')); populateLulusTahunOptions(); }
+  if (!isLulus) $('#reportPeriode').dispatchEvent(new Event('change'));
   $('#reportKelasField').classList.toggle('hidden', isIndividu);
   $('#reportSiswaField').classList.toggle('hidden', !isIndividu);
+  $('#reportRekapKelasWrap').style.display = isIndividu ? 'none' : '';
+  syncAbsensiViewUI();
 });
+
+/* Pilihan "Bentuk Rekap Absensi" hanya relevan saat Jenis Laporan = Rekap Absensi.
+   Khusus bentuk "Grid Bulanan" (meniru lembar absensi manual sekolah), periode
+   otomatis dikunci ke Bulanan karena satu lembar grid memang selalu mewakili
+   satu bulan penuh (kolom tanggal 1–31). */
+function syncAbsensiViewUI(){
+  const type = $('#reportType').value;
+  const isAbsensi = type === 'absensi';
+  const view = $('#reportAbsensiView').value;
+  $('#reportAbsensiViewField').classList.toggle('hidden', !isAbsensi);
+  const isGrid = isAbsensi && view === 'grid';
+  if (isGrid){
+    $('#reportPeriode').value = 'bulanan';
+    $('#reportTanggalField').classList.add('hidden');
+    $('#reportSemesterField').classList.add('hidden');
+    $('#reportTahunAjaranField').classList.add('hidden');
+    $('#reportBulanField').classList.remove('hidden');
+  }
+  $('#reportPeriodeField').classList.toggle('hidden', isGrid || type === 'siswa_lulus');
+  // Rekap per kelas otomatis sudah jadi isi laporannya sendiri pada bentuk
+  // "Per Kelas"/"Grid", jadi checkbox rekap ringkas disembunyikan di situ.
+  if (isAbsensi && (view === 'grid' || view === 'kelas')){
+    $('#reportRekapKelasWrap').style.display = 'none';
+  } else if (type !== 'individu'){
+    $('#reportRekapKelasWrap').style.display = '';
+  }
+}
+$('#reportAbsensiView').addEventListener('change', syncAbsensiViewUI);
 (function initReportDefaults(){
   const today = new Date();
   $('#reportTanggal').value = today.toISOString().slice(0,10);
   $('#reportBulan').value = today.toISOString().slice(0,7);
+  $('#reportTahunAjaran').value = SCHOOL_YEAR || '';
+  syncAbsensiViewUI();
 })();
 
+/* Ubah "2025/2026" (atau "2025-2026", "2025 2026") jadi { y1:2025, y2:2026 }.
+   Kalau formatnya tidak dikenali, pakai tahun berjalan sebagai fallback supaya
+   fitur semester tetap bisa dipakai walau Tahun Pelajaran di Pengaturan belum diisi. */
+function parseTahunAjaran(str){
+  const m = String(str || '').match(/(\d{4}).*?(\d{4})/);
+  if (m) return { y1: parseInt(m[1],10), y2: parseInt(m[2],10) };
+  const y = new Date().getFullYear();
+  return { y1: y, y2: y+1 };
+}
+function monthLabel(ym){
+  if (!ym) return '-';
+  const [y,m] = ym.split('-');
+  return new Date(y, m-1, 1).toLocaleDateString('id-ID',{month:'long',year:'numeric'});
+}
+/* Semester Ganjil = Juli–Desember (tahun pertama tahun pelajaran);
+   Semester Genap = Januari–Juni (tahun kedua tahun pelajaran) — konvensi umum sekolah di Indonesia. */
+function semesterMonthRange(){
+  const { y1, y2 } = parseTahunAjaran($('#reportTahunAjaran').value || SCHOOL_YEAR);
+  const isGenap = $('#reportSemester').value === 'genap';
+  return isGenap ? { startYM: `${y2}-01`, endYM: `${y2}-06` } : { startYM: `${y1}-07`, endYM: `${y1}-12` };
+}
+
+/* Untuk laporan Konseling, kolom "Nama" tetap berlabel "Nama" tapi ISInya
+   ditampilkan sebagai NIS siswa (permintaan: identitas di laporan konseling
+   pakai NIS, bukan nama, walau header tabel tetap "Nama"). Tipe laporan lain
+   tidak terpengaruh. */
+function reportCellValue(type, col, row){
+  if (type === 'konseling' && col === 'Nama') return konselingDisplayNis(row);
+  return row[col];
+}
+/* Kolom TTD (tanda tangan/paraf siswa) disimpan sebagai gambar (data URL),
+   jadi ditampilkan sebagai thumbnail gambar di Laporan (bukan teks panjang
+   yang di-escape seperti kolom lain), dengan klik untuk memperbesar lewat
+   lightbox yang sudah ada. */
+function reportSignatureCellHtml(val){
+  if (!val) return '<span class="muted">Belum TTD</span>';
+  return `<img src="${escapeHtml(val)}" alt="Tanda tangan siswa" class="signature-thumb" data-lightbox-src="${escapeHtml(val)}" title="Klik untuk perbesar" />`;
+}
 function filterByPeriode(rows, type){
   const periode = $('#reportPeriode').value;
   if (!periode) return rows;
@@ -1713,12 +2442,19 @@ function filterByPeriode(rows, type){
   if (periode === 'harian'){
     const tgl = $('#reportTanggal').value;
     if (!tgl) return rows;
-    return rows.filter(r => (r.Tanggal||'').slice(0,10) === tgl);
+    return rows.filter(r => normalizeTanggal(r.Tanggal) === tgl);
   }
   if (periode === 'bulanan'){
     const bln = $('#reportBulan').value; // yyyy-mm
     if (!bln) return rows;
-    return rows.filter(r => (r.Tanggal||'').slice(0,7) === bln);
+    return rows.filter(r => normalizeTanggal(r.Tanggal).slice(0,7) === bln);
+  }
+  if (periode === 'semester'){
+    const { startYM, endYM } = semesterMonthRange();
+    return rows.filter(r => {
+      const ym = normalizeTanggal(r.Tanggal).slice(0,7);
+      return ym && ym >= startYM && ym <= endYM;
+    });
   }
   return rows;
 }
@@ -1733,6 +2469,12 @@ function periodeLabel(){
     if (!bln) return 'Bulanan';
     const [y,m] = bln.split('-');
     return `Bulanan — ${new Date(y, m-1, 1).toLocaleDateString('id-ID',{month:'long',year:'numeric'})}`;
+  }
+  if (periode === 'semester'){
+    const { startYM, endYM } = semesterMonthRange();
+    const semLabel = $('#reportSemester').value === 'genap' ? 'Genap' : 'Ganjil';
+    const taj = ($('#reportTahunAjaran').value || SCHOOL_YEAR || '-').trim() || '-';
+    return `Semester ${semLabel} — Tahun Pelajaran ${taj} (${monthLabel(startYM)} s.d. ${monthLabel(endYM)})`;
   }
   return 'Semua Tanggal';
 }
@@ -1752,7 +2494,6 @@ $('#btnGenerateReport').addEventListener('click', () => {
     const pelanggaran = mine('pelanggaran');
     const konseling = mine('konseling');
     const kolaborasi = mine('kolaborasi');
-    const kebiasaan = mine('kebiasaan');
     const today = new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
 
     const section = (title, cols, rows, emptyMsg) => `
@@ -1760,7 +2501,7 @@ $('#btnGenerateReport').addEventListener('click', () => {
       <table>
         <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
         <tbody>
-          ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):escapeHtml(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">${emptyMsg}</td></tr>`}
+          ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):(c==='TTD'?reportSignatureCellHtml(r[c]):escapeHtml(r[c] ?? '-'))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">${emptyMsg}</td></tr>`}
         </tbody>
       </table>`;
 
@@ -1779,20 +2520,37 @@ $('#btnGenerateReport').addEventListener('click', () => {
       ${section('Rekap Absensi', ['Tanggal','Status','Keterangan'], absensi, 'Tidak ada catatan absensi')}
       ${buildReportSummaryHtml('pelanggaran', pelanggaran)}
       ${section('Rekap Pelanggaran', ['Tanggal','JenisPelanggaran','Poin','Penanganan'], pelanggaran, 'Tidak ada catatan pelanggaran')}
-      ${section('Rekap Konseling', ['Tanggal','Topik','HasilKonseling','TindakLanjut'], konseling, 'Tidak ada catatan konseling')}
-      ${section('Rekap Kolaborasi (Panggilan Ortu / Home Visit)', ['Tanggal','Jenis','Tujuan','Hasil'], kolaborasi, 'Tidak ada catatan kolaborasi')}
-      ${section('Rekap 7 Kebiasaan Anak Indonesia Hebat', ['Tanggal','BangunPagiPukul','IbadahSholat','OlahragaJenis','BelajarMapel','IstirahatPukul'], kebiasaan, 'Belum ada catatan kebiasaan harian')}
+      ${section('Rekap Konseling', ['Tanggal','Topik','HasilKonseling','TindakLanjut','TTD'], konseling, 'Tidak ada catatan konseling')}
+      ${section('Rekap Pemanggilan Orang Tua', ['Tanggal','NamaOrtuWali','Tujuan','Hasil','Petugas'], kolaborasi.filter(r => r.Jenis === 'Pemanggilan Orang Tua'), 'Tidak ada catatan pemanggilan orang tua')}
+      <h3 style="margin-top:22px">Rekap Home Visit</h3>
+      ${buildHomeVisitReportHtml(kolaborasi.filter(r => r.Jenis === 'Home Visit'))}
       ${s.Catatan ? `<h3 style="margin-top:22px">Catatan Tambahan</h3><p>${escapeHtml(s.Catatan)}</p>` : ''}
     `;
-    $('#reportPreview').innerHTML = html;
-    $('#reportPreviewCard').style.display = 'block';
-    $('#reportPreviewCard').scrollIntoView({ behavior:'smooth' });
-    setTimeout(() => window.print(), 400);
+    showReportPreview(html);
     return;
   }
 
+  /* ----- Siswa Lulus (arsip hasil menu Kenaikan & Kelulusan) ----- */
+  if (type === 'siswa_lulus'){
+    showReportPreview(buildSiswaLulusReportHtml());
+    return;
+  }
+
+  /* ----- Rekap Absensi: grid bulanan / per siswa / per kelas / per bulan ----- */
+  if (type === 'absensi'){
+    const view = $('#reportAbsensiView').value;
+    if (view !== 'rincian'){
+      const html = buildAbsensiReportHtml(view);
+      if (html === null) return; // validasi gagal, pesan sudah ditampilkan
+      showReportPreview(html, view === 'grid');
+      return;
+    }
+  }
+
   const kelas = $('#reportKelas').value;
-  let rows = STATE[type] || [];
+  let rows = (type === 'pemanggilan_ortu' || type === 'home_visit')
+    ? STATE.kolaborasi.filter(r => r.Jenis === (type === 'pemanggilan_ortu' ? 'Pemanggilan Orang Tua' : 'Home Visit'))
+    : (STATE[type] || []);
   if (kelas) rows = rows.filter(r => r.Kelas === kelas);
   rows = filterByPeriode(rows, type);
   if ('Tanggal' in (rows[0]||{}) || REPORT_COLUMNS[type].includes('Tanggal')){
@@ -1800,24 +2558,404 @@ $('#btnGenerateReport').addEventListener('click', () => {
   }
   const cols = REPORT_COLUMNS[type];
   const today = new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  const showRekapKelas = $('#reportRekapKelas').checked;
 
   const html = `
     <h2>${REPORT_TITLES[type]}</h2>
     <div class="report-head-line"><span>Kelas: ${escapeHtml(kelas || 'Semua Kelas')} &nbsp;|&nbsp; Periode: ${periodeLabel()}</span><span>Dicetak: ${today}</span></div>
     ${buildReportSummaryHtml(type, rows)}
+    ${showRekapKelas ? buildKelasRecapHtml(type, rows) : ''}
+    <h3 style="margin-top:22px">Rincian Data</h3>
+    ${type === 'home_visit' ? buildHomeVisitReportHtml(rows) : `
     <table>
       <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
       <tbody>
-        ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):escapeHtml(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">Tidak ada data</td></tr>`}
+        ${rows.length ? rows.map(r => `<tr>${cols.map(c => `<td>${c==='Tanggal'?fmtDate(r[c]):(c==='TTD'?reportSignatureCellHtml(r[c]):escapeHtml(reportCellValue(type, c, r) ?? '-'))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length}" style="text-align:center;color:#999">Tidak ada data</td></tr>`}
       </tbody>
-    </table>
+    </table>`}
     <p style="margin-top:24px;font-size:12px;color:#999">Total data: ${rows.length}</p>
   `;
+  showReportPreview(html);
+});
+
+/* ================= LAPORAN SISWA LULUS =================
+   Sumber datanya arsip "SiswaLulus" yang otomatis terisi saat Admin menjalankan
+   Kelulusan di menu Kenaikan & Kelulusan. Kolom Kelas = kelas terakhir siswa
+   sebelum lulus. Bisa disaring per Tahun Lulus & Kelas. */
+function populateLulusTahunOptions(){
+  const el = $('#reportTahunLulus'); if (!el) return;
+  const current = el.value;
+  const years = Array.from(new Set((STATE.siswaLulus||[]).map(r => String(r.TahunLulus || '').trim()).filter(Boolean))).sort().reverse();
+  el.innerHTML = '<option value="">Semua Tahun Lulus</option>' + years.map(y => `<option value="${escapeHtml(y)}">${escapeHtml(y)}</option>`).join('');
+  el.value = years.includes(current) ? current : '';
+  // isi juga daftar kelas laporan dengan kelas asal alumni (menyatu dengan kelas aktif)
+  const kel = $('#reportKelas');
+  if (kel){
+    const have = new Set($all('option', kel).map(o => o.value));
+    (STATE.siswaLulus||[]).map(r => r.Kelas).filter(k => k && !have.has(k)).forEach(k => { have.add(k); kel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`); });
+  }
+}
+function buildSiswaLulusReportHtml(){
+  const kelas = $('#reportKelas').value;
+  const tahun = $('#reportTahunLulus').value;
+  let rows = (STATE.siswaLulus || []).slice();
+  if (kelas) rows = rows.filter(r => r.Kelas === kelas);
+  if (tahun) rows = rows.filter(r => String(r.TahunLulus || '').trim() === tahun);
+  rows.sort((a,b) => String(b.TahunLulus||'').localeCompare(String(a.TahunLulus||'')) || String(a.Kelas||'').localeCompare(String(b.Kelas||''), 'id') || String(a.Nama||'').localeCompare(String(b.Nama||''), 'id'));
+  const cols = REPORT_COLUMNS.siswa_lulus;
+  const today = new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  const lk = rows.filter(r => String(r.JenisKelamin).toUpperCase().startsWith('L')).length;
+  const pr = rows.filter(r => String(r.JenisKelamin).toUpperCase().startsWith('P')).length;
+  const groups = {};
+  rows.forEach(r => { const k = `${r.TahunLulus || '-'}||${r.Kelas || '-'}`; groups[k] = (groups[k] || 0) + 1; });
+  const recap = Object.keys(groups).length ? `
+    <h3 style="margin-top:22px">Rekap per Tahun Lulus &amp; Kelas</h3>
+    <table><thead><tr><th>Tahun Lulus</th><th>Kelas Terakhir</th><th>Jumlah Siswa</th></tr></thead><tbody>
+    ${Object.keys(groups).map(k => { const [t, c] = k.split('||'); return `<tr><td>${escapeHtml(t)}</td><td>${escapeHtml(c)}</td><td>${groups[k]}</td></tr>`; }).join('')}
+    </tbody></table>` : '';
+  return `
+    <h2>${REPORT_TITLES.siswa_lulus}</h2>
+    <div class="report-head-line"><span>Tahun Lulus: ${escapeHtml(tahun || 'Semua')} &nbsp;|&nbsp; Kelas Terakhir: ${escapeHtml(kelas || 'Semua Kelas')}</span><span>Dicetak: ${today}</span></div>
+    <div class="report-summary">
+      <div class="report-summary-item"><span class="label">Total Siswa Lulus</span><span class="value">${rows.length}</span></div>
+      <div class="report-summary-item"><span class="label">Laki-laki</span><span class="value">${lk}</span></div>
+      <div class="report-summary-item"><span class="label">Perempuan</span><span class="value">${pr}</span></div>
+    </div>
+    ${recap}
+    <h3 style="margin-top:22px">Rincian Data</h3>
+    <table>
+      <thead><tr><th>No</th>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${rows.length ? rows.map((r,i) => `<tr><td>${i+1}</td>${cols.map(c => `<td>${c==='TanggalLulus'?fmtDate(r[c]):escapeHtml(r[c] ?? '-')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cols.length+1}" style="text-align:center;color:#999">Belum ada siswa yang diluluskan</td></tr>`}
+      </tbody>
+    </table>
+    <p style="margin-top:24px;font-size:12px;color:#999">Total data: ${rows.length}</p>`;
+}
+
+/* ================= REKAP ABSENSI (FORMAT LEMBAR ABSENSI SEKOLAH) =================
+   Meniru lembar "ABSENSI KELAS" manual: satu baris per siswa, kolom tanggal 1–31,
+   sel diisi kode S/I/A (Hadir sengaja dibiarkan kosong seperti di lembar aslinya),
+   lalu kolom JUMLAH (S | I | A) dan KETR di ujung kanan, ditutup rekap jumlah
+   siswa Putra/Putri serta blok tanda tangan Guru BK.
+   Empat bentuk rekap yang tersedia:
+   - grid   : grid bulanan per kelas (persis lembar manual)
+   - siswa  : rekap per anak (satu baris per siswa, total H/S/I/A + % kehadiran)
+   - kelas  : rekap per kelas (total H/S/I/A tiap kelas)
+   - bulan  : rekap per bulan (berguna untuk melihat satu semester sekaligus)
+   Semua bentuk selain "grid" mengikuti Periode yang dipilih (harian/bulanan/
+   semester/semua tanggal), jadi rekap per semester & per bulan tinggal memilih
+   periodenya. */
+
+/* Kode singkat di sel grid. Hadir ditandai centang (✓), sedangkan Sakit/Izin/Alfa
+   ditandai huruf S/I/A seperti lembar manual — jadi sel yang benar-benar kosong
+   berarti memang belum ada catatan absensi untuk siswa & tanggal itu. */
+function absenKode(status){
+  const s = String(status || '').trim().toLowerCase();
+  if (s === 'sakit') return 'S';
+  if (s === 'izin') return 'I';
+  if (s === 'alpa' || s === 'alpha' || s === 'tanpa keterangan') return 'A';
+  if (s === 'hadir' || s === 'masuk' || s === 'h') return '✓';
+  return '';
+}
+/* Tanggal bisa datang dalam beberapa bentuk: 'yyyy-mm-dd' (format normal dari
+   backend), ISO lengkap dengan jam ('2026-09-15T00:00:00.000Z') kalau sel Sheet
+   tersimpan sebagai Date, atau 'dd/mm/yyyy' kalau pernah diketik manual di Sheet.
+   Semua dinormalkan ke 'yyyy-mm-dd' supaya cocok saat dipetakan ke kolom tanggal. */
+function normalizeTanggal(value){
+  if (!value) return '';
+  if (value instanceof Date && !isNaN(value)){
+    const p = n => String(n).padStart(2,'0');
+    return `${value.getFullYear()}-${p(value.getMonth()+1)}-${p(value.getDate())}`;
+  }
+  const s = String(value).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/); // dd/mm/yyyy
+  if (m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+  const d = new Date(s);
+  if (!isNaN(d)){
+    const p = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  }
+  return '';
+}
+function daysInMonth(ym){
+  const [y,m] = String(ym||'').split('-').map(Number);
+  if (!y || !m) return 31;
+  return new Date(y, m, 0).getDate();
+}
+function isPutra(s){ return String(s.JenisKelamin||'').trim().toUpperCase().startsWith('L'); }
+function isPutri(s){ return String(s.JenisKelamin||'').trim().toUpperCase().startsWith('P'); }
+function sortSiswaByNama(list){
+  return list.slice().sort((a,b) => String(a.Nama||'').localeCompare(String(b.Nama||''), 'id'));
+}
+/* Daftar siswa yang jadi baris rekap: diambil dari Data Siswa (bukan dari catatan
+   absensi) supaya siswa yang selalu hadir / belum pernah dicatat pun tetap muncul
+   barisnya — sama seperti lembar absensi manual yang memuat seluruh siswa kelas. */
+function siswaForReport(kelas){
+  const list = (STATE.siswa || []).filter(s => !kelas || s.Kelas === kelas);
+  return sortSiswaByNama(list);
+}
+/* Cocokkan catatan absensi ke siswa: utamakan SiswaID, tapi tetap bisa jatuh ke
+   pencocokan Nama+Kelas supaya data lama yang SiswaID-nya kosong tidak hilang. */
+function absensiSiswaKey(row){
+  return String(row.SiswaID || '').trim() || ('nama:' + String(row.Nama||'').trim().toLowerCase() + '|' + String(row.Kelas||'').trim().toLowerCase());
+}
+function siswaKeys(s){
+  return [String(s.ID||'').trim(), 'nama:' + String(s.Nama||'').trim().toLowerCase() + '|' + String(s.Kelas||'').trim().toLowerCase()];
+}
+
+function buildAbsensiReportHtml(view){
+  const kelas = $('#reportKelas').value;
+  if (view === 'grid'){
+    if (!kelas){ toast('Pilih Kelas terlebih dahulu untuk Grid Bulanan (satu lembar = satu kelas).', 'error'); return null; }
+    const ym = $('#reportBulan').value;
+    if (!ym){ toast('Pilih Bulan terlebih dahulu.', 'error'); return null; }
+    return buildAbsensiGridHtml(kelas, ym);
+  }
+  let rows = filterByPeriode((STATE.absensi || []).filter(r => !kelas || r.Kelas === kelas), 'absensi');
+  const headLine = `<div class="report-head-line"><span>Kelas: ${escapeHtml(kelas || 'Semua Kelas')} &nbsp;|&nbsp; Periode: ${periodeLabel()}</span><span>Dicetak: ${todayLabel()}</span></div>`;
+  if (view === 'siswa'){
+    return `<h2>Rekap Absensi Per Siswa</h2>${headLine}${buildReportSummaryHtml('absensi', rows)}
+      ${buildAbsensiPerSiswaHtml(rows, kelas)}${buildSignatureBlockHtml()}`;
+  }
+  if (view === 'kelas'){
+    return `<h2>Rekap Absensi Per Kelas</h2>${headLine}${buildReportSummaryHtml('absensi', rows)}
+      ${buildKelasRecapHtml('absensi', rows) || '<p style="text-align:center;color:#999;margin-top:16px">Tidak ada data absensi pada periode ini</p>'}${buildSignatureBlockHtml()}`;
+  }
+  // view === 'bulan'
+  return `<h2>Rekap Absensi Per Bulan</h2>${headLine}${buildReportSummaryHtml('absensi', rows)}
+    ${buildAbsensiPerBulanHtml(rows)}${buildSignatureBlockHtml()}`;
+}
+
+/* Grid bulanan satu kelas — tiruan lembar "ABSENSI KELAS" pada lampiran. */
+function buildAbsensiGridHtml(kelas, ym){
+  const siswa = siswaForReport(kelas);
+  const jml = daysInMonth(ym);
+  const days = Array.from({length: jml}, (_,i) => i+1);
+
+  /* Peta: kunci siswa + tanggal -> kode (✓ / S / I / A). Tanggal dinormalkan dulu
+     lewat normalizeTanggal() supaya catatan yang tersimpan sebagai Date di Sheet
+     (mis. '2026-09-15T00:00:00.000Z') atau diketik 'dd/mm/yyyy' tetap terbaca. */
+  const map = {};
+  (STATE.absensi || []).forEach(r => {
+    const tgl = normalizeTanggal(r.Tanggal);
+    if (!tgl || tgl.slice(0,7) !== ym) return;
+    const kode = absenKode(r.Status);
+    if (!kode) return;
+    const day = parseInt(tgl.slice(8,10), 10);
+    if (!day) return;
+    map[absensiSiswaKey(r) + '#' + day] = kode;
+  });
+
+  const body = siswa.map((s, i) => {
+    const keys = siswaKeys(s);
+    const count = { S:0, I:0, A:0, '✓':0 };
+    const cells = days.map(d => {
+      let kode = '';
+      for (const k of keys){ if (map[k + '#' + d]){ kode = map[k + '#' + d]; break; } }
+      if (kode) count[kode]++;
+      return `<td class="ag-day${kode === '✓' ? ' ag-hadir' : ''}">${kode}</td>`;
+    }).join('');
+    return `<tr>
+      <td class="ag-no">${i+1}</td>
+      <td class="ag-nama">${escapeHtml(s.Nama || '-')}</td>
+      <td class="ag-lp">${escapeHtml(String(s.JenisKelamin||'').trim().toUpperCase().charAt(0) || '-')}</td>
+      ${cells}
+      <td class="ag-sum">${count.S || ''}</td>
+      <td class="ag-sum">${count.I || ''}</td>
+      <td class="ag-sum">${count.A || ''}</td>
+      <td class="ag-ketr"></td>
+    </tr>`;
+  }).join('');
+
+  const putra = siswa.filter(isPutra).length;
+  const putri = siswa.filter(isPutri).length;
+
+  return `
+    <h2 class="ag-title">ABSENSI KELAS</h2>
+    ${SCHOOL_NAME ? `<p class="ag-school">${escapeHtml(SCHOOL_NAME)}${SCHOOL_YEAR ? ` — Tahun Pelajaran ${escapeHtml(SCHOOL_YEAR)}` : ''}</p>` : ''}
+    <div class="ag-headline">
+      <span>KELAS : <b>${escapeHtml(kelas)}</b></span>
+      <span>BULAN : <b>${escapeHtml(monthLabel(ym))}</b></span>
+    </div>
+    <table class="absensi-grid">
+      <thead>
+        <tr>
+          <th rowspan="2" class="ag-no">NO</th>
+          <th rowspan="2" class="ag-nama">NAMA PESERTA DIDIK</th>
+          <th rowspan="2" class="ag-lp">L/P</th>
+          <th colspan="${jml}">TANGGAL</th>
+          <th colspan="3">JUMLAH</th>
+          <th rowspan="2" class="ag-ketr">KETR</th>
+        </tr>
+        <tr>
+          ${days.map(d => `<th class="ag-day">${d}</th>`).join('')}
+          <th class="ag-sum">S</th><th class="ag-sum">I</th><th class="ag-sum">A</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${siswa.length ? body : `<tr><td colspan="${jml+7}" style="text-align:center;color:#999">Belum ada siswa di kelas ini</td></tr>`}
+      </tbody>
+    </table>
+    <div class="ag-foot">
+      <div class="ag-foot-left">
+        <div class="ag-foot-row"><b>JUMLAH</b> &nbsp; PUTRA : <b>${putra}</b> Anak</div>
+        <div class="ag-foot-row" style="padding-left:62px">PUTRI : <b>${putri}</b> Anak</div>
+        <div class="ag-foot-row" style="padding-left:62px">TOTAL &nbsp;: <b>${siswa.length}</b> Anak</div>
+        <div class="ag-foot-row" style="margin-top:8px"><b>KETERANGAN</b></div>
+        <div class="ag-foot-row">&#10003; : Hadir &nbsp; &nbsp; S : Sakit &nbsp; &nbsp; I : Izin &nbsp; &nbsp; A : Alfa</div>
+      </div>
+      ${buildSignatureBlockHtml(true)}
+    </div>`;
+}
+
+/* Rekap per anak: satu baris per siswa berisi total Hadir/Sakit/Izin/Alpa dan
+   persentase kehadiran terhadap jumlah hari yang tercatat untuk siswa itu. */
+function buildAbsensiPerSiswaHtml(rows, kelas){
+  const siswa = siswaForReport(kelas);
+  const byKey = {};
+  rows.forEach(r => {
+    const k = absensiSiswaKey(r);
+    if (!byKey[k]) byKey[k] = { Hadir:0, Sakit:0, Izin:0, Alpa:0 };
+    const st = String(r.Status||'').trim();
+    if (byKey[k][st] !== undefined) byKey[k][st]++;
+    else if (absenKode(st) === 'A') byKey[k].Alpa++;
+  });
+
+  const total = { Hadir:0, Sakit:0, Izin:0, Alpa:0 };
+  const body = siswa.map((s, i) => {
+    let c = { Hadir:0, Sakit:0, Izin:0, Alpa:0 };
+    siswaKeys(s).forEach(k => {
+      if (byKey[k]) Object.keys(c).forEach(st => { c[st] += byKey[k][st]; });
+    });
+    const jumlah = c.Hadir + c.Sakit + c.Izin + c.Alpa;
+    const persen = jumlah ? Math.round((c.Hadir / jumlah) * 100) : 0;
+    Object.keys(total).forEach(st => { total[st] += c[st]; });
+    return `<tr>
+      <td style="text-align:center">${i+1}</td>
+      <td>${escapeHtml(s.NIS || '-')}</td>
+      <td>${escapeHtml(s.Nama || '-')}</td>
+      <td style="text-align:center">${escapeHtml(String(s.JenisKelamin||'-').trim().toUpperCase().charAt(0) || '-')}</td>
+      <td style="text-align:center">${escapeHtml(s.Kelas || '-')}</td>
+      <td style="text-align:center">${c.Hadir}</td>
+      <td style="text-align:center">${c.Sakit}</td>
+      <td style="text-align:center">${c.Izin}</td>
+      <td style="text-align:center">${c.Alpa}</td>
+      <td style="text-align:center">${jumlah}</td>
+      <td style="text-align:center">${jumlah ? persen + '%' : '-'}</td>
+    </tr>`;
+  }).join('');
+
+  const totalHari = total.Hadir + total.Sakit + total.Izin + total.Alpa;
+  return `
+    <h3 style="margin-top:22px">Rekap Per Siswa</h3>
+    <table>
+      <thead><tr>
+        <th>No</th><th>NIS</th><th>Nama</th><th>L/P</th><th>Kelas</th>
+        <th>Hadir</th><th>Sakit</th><th>Izin</th><th>Alpa</th><th>Jumlah</th><th>% Hadir</th>
+      </tr></thead>
+      <tbody>
+        ${siswa.length ? body : `<tr><td colspan="11" style="text-align:center;color:#999">Tidak ada siswa</td></tr>`}
+        <tr style="font-weight:700;background:#f7f8f6">
+          <td colspan="5">Total</td>
+          <td style="text-align:center">${total.Hadir}</td>
+          <td style="text-align:center">${total.Sakit}</td>
+          <td style="text-align:center">${total.Izin}</td>
+          <td style="text-align:center">${total.Alpa}</td>
+          <td style="text-align:center">${totalHari}</td>
+          <td style="text-align:center">${totalHari ? Math.round((total.Hadir/totalHari)*100) + '%' : '-'}</td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
+/* Rekap per bulan — paling berguna saat Periode dipilih "Semester", supaya satu
+   semester terlihat bulan demi bulan dalam satu tabel. */
+function buildAbsensiPerBulanHtml(rows){
+  const byMonth = {};
+  rows.forEach(r => {
+    const ym = normalizeTanggal(r.Tanggal).slice(0,7);
+    if (!ym) return;
+    if (!byMonth[ym]) byMonth[ym] = { Hadir:0, Sakit:0, Izin:0, Alpa:0 };
+    const st = String(r.Status||'').trim();
+    if (byMonth[ym][st] !== undefined) byMonth[ym][st]++;
+    else if (absenKode(st) === 'A') byMonth[ym].Alpa++;
+  });
+  const months = Object.keys(byMonth).sort();
+  const total = { Hadir:0, Sakit:0, Izin:0, Alpa:0 };
+  const body = months.map(ym => {
+    const c = byMonth[ym];
+    Object.keys(total).forEach(st => { total[st] += c[st]; });
+    const jml = c.Hadir + c.Sakit + c.Izin + c.Alpa;
+    return `<tr>
+      <td>${escapeHtml(monthLabel(ym))}</td>
+      <td style="text-align:center">${c.Hadir}</td>
+      <td style="text-align:center">${c.Sakit}</td>
+      <td style="text-align:center">${c.Izin}</td>
+      <td style="text-align:center">${c.Alpa}</td>
+      <td style="text-align:center">${jml}</td>
+      <td style="text-align:center">${jml ? Math.round((c.Hadir/jml)*100) + '%' : '-'}</td>
+    </tr>`;
+  }).join('');
+  const totalHari = total.Hadir + total.Sakit + total.Izin + total.Alpa;
+  return `
+    <h3 style="margin-top:22px">Rekap Per Bulan</h3>
+    <table>
+      <thead><tr><th>Bulan</th><th>Hadir</th><th>Sakit</th><th>Izin</th><th>Alpa</th><th>Jumlah</th><th>% Hadir</th></tr></thead>
+      <tbody>
+        ${months.length ? body : `<tr><td colspan="7" style="text-align:center;color:#999">Tidak ada data pada periode ini</td></tr>`}
+        <tr style="font-weight:700;background:#f7f8f6">
+          <td>Total</td>
+          <td style="text-align:center">${total.Hadir}</td>
+          <td style="text-align:center">${total.Sakit}</td>
+          <td style="text-align:center">${total.Izin}</td>
+          <td style="text-align:center">${total.Alpa}</td>
+          <td style="text-align:center">${totalHari}</td>
+          <td style="text-align:center">${totalHari ? Math.round((total.Hadir/totalHari)*100) + '%' : '-'}</td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
+function todayLabel(){
+  return new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+}
+/* Blok tanda tangan Guru BK di kaki laporan, mengikuti lembar absensi manual.
+   Nama kota, nama Guru BK & NIP diambil dari menu Pengaturan > Profil Sekolah. */
+function buildSignatureBlockHtml(inline){
+  const kota = SCHOOL_CITY || '..................';
+  const nama = SCHOOL_BK_NAME || '..................................';
+  const nip = SCHOOL_BK_NIP || '-';
+  return `
+    <div class="report-signature${inline ? ' report-signature--inline' : ''}">
+      <p>${escapeHtml(kota)}, ${todayLabel()}</p>
+      <p>Guru BK</p>
+      <div class="report-signature-space"></div>
+      <p class="report-signature-name">${escapeHtml(nama)}</p>
+      <p>NIP. ${escapeHtml(nip)}</p>
+    </div>`;
+}
+
+/* Satu pintu untuk menampilkan & mencetak laporan. Grid bulanan otomatis dicetak
+   landscape (kolom tanggal 1–31 tidak muat di portrait) lewat aturan @page yang
+   disuntikkan sementara, lalu dikembalikan ke portrait untuk laporan lain. */
+function showReportPreview(html, landscape){
   $('#reportPreview').innerHTML = html;
+  $('#reportPreview').classList.toggle('report-preview--wide', !!landscape);
+  let styleEl = document.getElementById('printOrientationStyle');
+  if (!styleEl){
+    styleEl = document.createElement('style');
+    styleEl.id = 'printOrientationStyle';
+    document.head.appendChild(styleEl);
+  }
+  styleEl.textContent = landscape
+    ? '@page { size: A4 landscape; margin: 10mm; }'
+    : '@page { size: A4 portrait; margin: 14mm; }';
   $('#reportPreviewCard').style.display = 'block';
   $('#reportPreviewCard').scrollIntoView({ behavior:'smooth' });
   setTimeout(() => window.print(), 400);
-});
+}
 
 /* Ringkasan total absensi (Hadir/Sakit/Izin/Alpa) & total pelanggaran, ditampilkan di atas tabel laporan */
 function buildReportSummaryHtml(type, rows){
@@ -1842,6 +2980,84 @@ function buildReportSummaryHtml(type, rows){
       </div>`;
   }
   return '';
+}
+
+/* Rekap ringkas per kelas — mengelompokkan data (yang sudah difilter periode/kelas)
+   berdasarkan kolom Kelas, supaya guru BK bisa langsung lihat perbandingan antar
+   kelas dalam satu bulan / satu semester tanpa harus scroll rincian satu-satu. */
+function buildKelasRecapHtml(type, rows){
+  if (!rows.length) return '';
+  const classes = Array.from(new Set(rows.map(r => r.Kelas || '-'))).sort((a,b)=> String(a).localeCompare(String(b), 'id'));
+  if (classes.length < 1) return '';
+
+  let head, body;
+  if (type === 'siswa'){
+    head = ['Kelas','Jumlah Siswa','Laki-laki','Perempuan'];
+    body = classes.map(k => {
+      const grp = rows.filter(r => (r.Kelas||'-') === k);
+      const l = grp.filter(r => String(r.JenisKelamin).toUpperCase().startsWith('L')).length;
+      const p = grp.filter(r => String(r.JenisKelamin).toUpperCase().startsWith('P')).length;
+      return [k, grp.length, l, p];
+    });
+  } else if (type === 'absensi'){
+    head = ['Kelas','Hadir','Sakit','Izin','Alpa','Total'];
+    body = classes.map(k => {
+      const grp = rows.filter(r => (r.Kelas||'-') === k);
+      const c = { Hadir:0, Sakit:0, Izin:0, Alpa:0 };
+      grp.forEach(r => { if (c[r.Status] !== undefined) c[r.Status]++; });
+      return [k, c.Hadir, c.Sakit, c.Izin, c.Alpa, grp.length];
+    });
+  } else if (type === 'pelanggaran'){
+    head = ['Kelas','Jumlah Kasus','Total Poin'];
+    body = classes.map(k => {
+      const grp = rows.filter(r => (r.Kelas||'-') === k);
+      const totalPoin = grp.reduce((s,r)=> s + (Number(r.Poin)||0), 0);
+      return [k, grp.length, totalPoin];
+    });
+  } else {
+    // konseling, kolaborasi, pemanggilan_ortu, home_visit: cukup jumlah catatan per kelas
+    const labelMap = { konseling:'Jumlah Sesi Konseling', kolaborasi:'Jumlah Kegiatan Kolaborasi', pemanggilan_ortu:'Jumlah Pemanggilan Orang Tua', home_visit:'Jumlah Home Visit' };
+    head = ['Kelas', labelMap[type] || 'Jumlah Data'];
+    body = classes.map(k => {
+      const grp = rows.filter(r => (r.Kelas||'-') === k);
+      return [k, grp.length];
+    });
+  }
+
+  const totalsRow = head.map((h,i) => {
+    if (i === 0) return 'Total';
+    const isNumericCol = body.every(row => typeof row[i] === 'number');
+    return isNumericCol ? body.reduce((s,row)=> s + row[i], 0) : '';
+  });
+
+  return `
+    <h3 style="margin-top:22px">Rekap per Kelas</h3>
+    <table>
+      <thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${body.map(row => `<tr>${row.map((v,i)=> `<td${i>0?' style="text-align:center"':''}>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}
+        <tr style="font-weight:700;background:#f7f8f6">${totalsRow.map((v,i)=> `<td${i>0?' style="text-align:center"':''}>${escapeHtml(v)}</td>`).join('')}</tr>
+      </tbody>
+    </table>`;
+}
+
+/* Rincian Rekap Home Visit ditampilkan sebagai kartu (bukan tabel biasa) supaya
+   foto bukti kunjungan ikut tampil & bisa diperbesar (klik foto = lightbox),
+   baik di Laporan per kelas maupun Laporan Individu Siswa. */
+function buildHomeVisitReportHtml(rows){
+  if (!rows.length) return `<p style="text-align:center;color:#999;margin-top:16px">Tidak ada data Home Visit</p>`;
+  return `<div class="report-homevisit-grid">${rows.map(r => `
+    <div class="report-homevisit-card">
+      <div class="report-homevisit-head">
+        <b>${escapeHtml(r.Nama||'-')}</b>&nbsp;<span class="muted">(${escapeHtml(r.Kelas||'-')})</span>
+        <span class="report-homevisit-date">${fmtDate(r.Tanggal)}</span>
+      </div>
+      <p><b>Orang Tua/Wali:</b> ${escapeHtml(r.NamaOrtuWali||'-')}</p>
+      <p><b>Tujuan:</b> ${escapeHtml(r.Tujuan||'-')}</p>
+      <p><b>Hasil:</b> ${escapeHtml(r.Hasil||'-')}</p>
+      <p><b>Petugas:</b> ${escapeHtml(r.Petugas||'-')}</p>
+      ${r.BuktiFoto ? `<img src="${escapeHtml(r.BuktiFoto)}" alt="Bukti Home Visit" class="report-homevisit-photo" data-lightbox-id="${escapeHtml(r.ID)}" title="Klik untuk perbesar" />` : '<p class="muted">Tidak ada foto bukti</p>'}
+    </div>`).join('')}</div>`;
 }
 
 /* ---------------- IMPORT DATA SISWA DARI EXCEL ----------------
@@ -1895,6 +3111,8 @@ $('#importSiswaFile').addEventListener('change', async (e) => {
 function enterApp(){
   $('#setupScreen').classList.add('hidden');
   $('#app').classList.remove('hidden');
+  applyRoleUI();
+  renderSchoolProfile();
   loadAll();
 }
 $('#apiUrlSave').addEventListener('click', () => {
@@ -1902,12 +3120,235 @@ $('#apiUrlSave').addEventListener('click', () => {
   const tokenVal = $('#apiTokenInput').value.trim();
   if (!val){ toast('Masukkan URL Web App terlebih dahulu.', 'error'); return; }
   API_URL = val; API_TOKEN = tokenVal;
+  USER_ROLE = 'admin'; GURU_NAMA = ''; GURU_KELAS = []; KONSELOR_NAMA = ''; KONSELOR_KELAS = [];
   adapter = RealAdapter;
   localStorage.setItem('bk_api_url', API_URL);
   localStorage.setItem('bk_api_token', API_TOKEN);
+  localStorage.setItem('bk_role', 'admin');
+  localStorage.removeItem('bk_guru_nama');
+  localStorage.removeItem('bk_guru_kelas');
+  localStorage.removeItem('bk_konselor_nama');
+  localStorage.removeItem('bk_konselor_kelas');
   localStorage.removeItem('bk_demo_mode');
   enterApp();
 });
+
+/* ---------------- LOGIN GURU MAPEL & LOGIN KONSELOR (GURU BK) ----------------
+   Guru mapel / Konselor hanya mengisi Username & Password (atau PIN) — URL
+   Web App sudah otomatis terisi (DEFAULT_API_URL yang di-bake admin, atau
+   tersisa dari sesi sebelumnya di browser yang sama). Tidak ada field
+   URL/token yang perlu mereka sentuh sama sekali. Ada 3 kartu login yang
+   saling berpindah: Admin/Guru BK utama, Guru Mapel, dan Konselor. */
+$('#showGuruLoginLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#adminSetupCard').classList.add('hidden');
+  $('#konselorLoginCard').classList.add('hidden');
+  $('#guruLoginCard').classList.remove('hidden');
+});
+$('#showAdminLoginLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#guruLoginCard').classList.add('hidden');
+  $('#konselorLoginCard').classList.add('hidden');
+  $('#adminSetupCard').classList.remove('hidden');
+});
+$('#showKonselorLoginLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#adminSetupCard').classList.add('hidden');
+  $('#guruLoginCard').classList.add('hidden');
+  $('#konselorLoginCard').classList.remove('hidden');
+});
+$('#showKonselorLoginFromGuruLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#guruLoginCard').classList.add('hidden');
+  $('#konselorLoginCard').classList.remove('hidden');
+});
+$('#showGuruLoginFromKonselorLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#konselorLoginCard').classList.add('hidden');
+  $('#guruLoginCard').classList.remove('hidden');
+});
+$('#showAdminLoginLink2').addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#konselorLoginCard').classList.add('hidden');
+  $('#guruLoginCard').classList.add('hidden');
+  $('#adminSetupCard').classList.remove('hidden');
+});
+async function submitGuruLogin(){
+  const username = $('#guruUsernameInput').value.trim();
+  const password = $('#guruPasswordInput').value;
+  if (!username || !password){ toast('Username dan password wajib diisi.', 'error'); return; }
+  if (!API_URL){
+    toast('Aplikasi belum tersambung ke server sekolah. Hubungi Guru BK/admin.', 'error');
+    return;
+  }
+  const btn = $('#guruLoginBtn');
+  const originalLabel = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Masuk...';
+  try{
+    const session = await RealAdapter.loginGuru(username, password);
+    API_TOKEN = session.sessionToken;
+    USER_ROLE = 'guru';
+    GURU_NAMA = session.nama || '';
+    GURU_KELAS = session.kelas || [];
+    adapter = RealAdapter;
+    localStorage.setItem('bk_api_url', API_URL);
+    localStorage.setItem('bk_api_token', API_TOKEN);
+    localStorage.setItem('bk_role', 'guru');
+    localStorage.setItem('bk_guru_nama', GURU_NAMA);
+    localStorage.setItem('bk_guru_kelas', JSON.stringify(GURU_KELAS));
+    localStorage.removeItem('bk_demo_mode');
+    $('#guruPasswordInput').value = '';
+    enterApp();
+  }catch(err){
+    toast(err.message, 'error');
+  }finally{
+    btn.disabled = false; btn.innerHTML = originalLabel;
+  }
+}
+$('#guruLoginBtn').addEventListener('click', submitGuruLogin);
+$('#guruPasswordInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitGuruLogin(); });
+
+/* Sama seperti submitGuruLogin(), tapi untuk akun Konselor (Guru BK per-kelas)
+   yang dibatasi ke menu Konseling saja. */
+async function submitKonselorLogin(){
+  const username = $('#konselorUsernameInput').value.trim();
+  const password = $('#konselorPasswordInput').value;
+  if (!username || !password){ toast('Username dan Password/PIN wajib diisi.', 'error'); return; }
+  if (!API_URL){
+    toast('Aplikasi belum tersambung ke server sekolah. Hubungi Admin/Guru BK.', 'error');
+    return;
+  }
+  const btn = $('#konselorLoginBtn');
+  const originalLabel = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Masuk...';
+  try{
+    const session = await RealAdapter.loginKonselor(username, password);
+    API_TOKEN = session.sessionToken;
+    USER_ROLE = 'konselor';
+    KONSELOR_NAMA = session.nama || '';
+    KONSELOR_KELAS = session.kelas || [];
+    adapter = RealAdapter;
+    localStorage.setItem('bk_api_url', API_URL);
+    localStorage.setItem('bk_api_token', API_TOKEN);
+    localStorage.setItem('bk_role', 'konselor');
+    localStorage.setItem('bk_konselor_nama', KONSELOR_NAMA);
+    localStorage.setItem('bk_konselor_kelas', JSON.stringify(KONSELOR_KELAS));
+    localStorage.removeItem('bk_demo_mode');
+    $('#konselorPasswordInput').value = '';
+    enterApp();
+  }catch(err){
+    toast(err.message, 'error');
+  }finally{
+    btn.disabled = false; btn.innerHTML = originalLabel;
+  }
+}
+$('#konselorLoginBtn').addEventListener('click', submitKonselorLogin);
+$('#konselorPasswordInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitKonselorLogin(); });
+
+/* Tampilkan/sembunyikan menu sesuai peran yang login.
+   - Guru Mapel: menu dibatasi HANYA ke halaman Pelanggaran (perilaku lama,
+     tidak berubah).
+   - Konselor (Guru BK): menu tampil LENGKAP seperti Admin (Dashboard, Siswa,
+     Absensi, Pelanggaran, Konseling, Kolaborasi, Laporan) karena
+     backend juga mengizinkan dia membaca semua data itu (lihat Code.gs).
+     Yang tetap disembunyikan hanya tombol Pengaturan & Kelola Akun (Guru
+     Mapel/Konselor), karena itu wilayah Admin. Pembatasan sesungguhnya untuk
+     Konselor ada di data Konseling itu sendiri (server hanya mengirim &
+     menerima data Konseling untuk kelas tanggung jawabnya — lihat Code.gs),
+     bukan di penyembunyian menu.
+   Ini murni tampilan — backend TETAP menolak akses ke tipe/kelas data yang
+   tidak diizinkan walau menu terlihat (lihat Code.gs). */
+function updateRoleBadge(){
+  const badge = $('#guruBadge');
+  if (!badge) return;
+  badge.classList.toggle('hidden', false);
+  if (USER_ROLE === 'guru') badge.textContent = `${GURU_NAMA}${GURU_KELAS.length ? ' · ' + GURU_KELAS.join(', ') : ' · Semua Kelas'}`;
+  else if (USER_ROLE === 'konselor') badge.textContent = `${KONSELOR_NAMA}${KONSELOR_KELAS.length ? ' · Konseling: ' + KONSELOR_KELAS.join(', ') : ' · Konseling: Semua Kelas'}`;
+  else badge.textContent = 'Admin BK';
+}
+/* Profil akun (nama & kelas) yang dikirim server tiap kali data dimuat. Kelas di
+   token login/localStorage bisa basi kalau Admin mengubahnya setelah login, jadi
+   selalu ditimpa dengan data terbaru dari Sheet. */
+function applyProfileFromServer(me){
+  if (!me || USER_ROLE === 'admin') return;
+  const kelas = Array.isArray(me.kelas) ? me.kelas : [];
+  if (USER_ROLE === 'konselor'){
+    KONSELOR_NAMA = me.nama || KONSELOR_NAMA; KONSELOR_KELAS = kelas;
+    localStorage.setItem('bk_konselor_nama', KONSELOR_NAMA);
+    localStorage.setItem('bk_konselor_kelas', JSON.stringify(KONSELOR_KELAS));
+  } else if (USER_ROLE === 'guru'){
+    GURU_NAMA = me.nama || GURU_NAMA; GURU_KELAS = kelas;
+    localStorage.setItem('bk_guru_nama', GURU_NAMA);
+    localStorage.setItem('bk_guru_kelas', JSON.stringify(GURU_KELAS));
+  }
+  updateRoleBadge();
+}
+function applyRoleUI(){
+  const isGuru = USER_ROLE === 'guru';
+  const isKonselor = USER_ROLE === 'konselor';
+  $all('.nav-item[data-page]').forEach(n => n.classList.toggle('hidden', isGuru && n.dataset.page !== 'pelanggaran'));
+  $all('.bn-item[data-page]').forEach(n => n.classList.toggle('hidden', isGuru && n.dataset.page !== 'pelanggaran'));
+  $('#settingsBtn').classList.toggle('hidden', isGuru || isKonselor);
+  $('#settingsBtnMobile').classList.toggle('hidden', isGuru || isKonselor);
+  $('#guruAccountsBtn').classList.toggle('hidden', isGuru || isKonselor);
+  $('#guruAccountsBtnMobile').classList.toggle('hidden', isGuru || isKonselor);
+  $('#konselorAccountsBtn').classList.toggle('hidden', isGuru || isKonselor);
+  $('#konselorAccountsBtnMobile').classList.toggle('hidden', isGuru || isKonselor);
+  /* Tombol "Keluar" ditampilkan untuk SEMUA peran (Admin, Guru Mapel, maupun
+     Konselor) — sebelumnya hanya tampil untuk Guru Mapel/Konselor, sehingga
+     Admin yang sesi login-nya otomatis tersimpan (lihat init() di bawah) tidak
+     punya cara untuk keluar dan kembali ke layar login awal lewat tampilan. */
+  $('#logoutBtn').classList.remove('hidden');
+  $('#logoutBtnMobile').classList.remove('hidden');
+  const mplBtn = $('#btnMasterPelanggaran');
+  if (mplBtn) mplBtn.classList.toggle('hidden', isGuru || isKonselor);
+  /* Konselor sekarang boleh MENULIS ke Konseling, Kolaborasi, Absensi, dan
+     Pelanggaran (lihat ROLE_WRITABLE_TYPES.konselor di Code.gs) — jadi tombol
+     tambah untuk keempat itu TIDAK disembunyikan lagi. Yang tetap disembunyikan
+     hanya untuk tipe yang memang masih tertutup total buat Konselor (Data Siswa)
+     dan fitur admin-only (Absen Massal, Import Siswa) yang tetap
+     ditolak server siapa pun selain Admin. */
+  ['#btnAddSiswa','#btnImportSiswa','#btnBulkPrintBarcode']
+    .forEach(sel => { const el = $(sel); if (el) el.classList.toggle('hidden', isKonselor); });
+  /* Menu "Kenaikan & Kelulusan" mengelola Data Siswa secara massal (termasuk
+     menghapus siswa saat kelulusan) — backend hanya mengizinkan Admin/Guru BK
+     utama (lihat assertIsAdmin di Code.gs), jadi disembunyikan juga untuk
+     Konselor di tampilan (bukan cuma Guru Mapel yang sudah tertutup lewat
+     aturan umum di atas). */
+  $all('.nav-item[data-page="kenaikan"]').forEach(n => n.classList.toggle('hidden', isGuru || isKonselor));
+  updateRoleBadge();
+  if (isGuru) goToPage('pelanggaran');
+  else if (isKonselor) goToPage('konseling');
+}
+
+function logout(){
+  API_TOKEN = ''; USER_ROLE = 'admin'; GURU_NAMA = ''; GURU_KELAS = []; KONSELOR_NAMA = ''; KONSELOR_KELAS = [];
+  localStorage.removeItem('bk_api_token');
+  localStorage.removeItem('bk_role');
+  localStorage.removeItem('bk_guru_nama');
+  localStorage.removeItem('bk_guru_kelas');
+  localStorage.removeItem('bk_konselor_nama');
+  localStorage.removeItem('bk_konselor_kelas');
+  $('#app').classList.add('hidden');
+  $('#setupScreen').classList.remove('hidden');
+  // Kembali ke kartu login yang sama seperti pengunjung baru akan lihat (lihat
+  // init() di bawah): kalau URL Web App sudah ter-bake (DEFAULT_API_URL),
+  // tampilkan dulu form Guru Mapel; kalau tidak, tampilkan kartu Admin/Guru BK
+  // utama. Ini juga berlaku saat Admin sendiri yang menekan "Keluar".
+  $('#adminSetupCard').classList.toggle('hidden', !!DEFAULT_API_URL);
+  $('#guruLoginCard').classList.toggle('hidden', !DEFAULT_API_URL);
+  $('#konselorLoginCard').classList.add('hidden');
+  $('#guruUsernameInput').value = '';
+  $('#guruPasswordInput').value = '';
+  $('#konselorUsernameInput').value = '';
+  $('#konselorPasswordInput').value = '';
+  // Kosongkan ACCESS_TOKEN yang sempat terisi di kartu Admin supaya tidak
+  // tertinggal ter-prefill di layar login untuk pengguna berikutnya di
+  // perangkat/browser yang sama.
+  $('#apiTokenInput').value = '';
+}
+$('#logoutBtn').addEventListener('click', logout);
+$('#logoutBtnMobile').addEventListener('click', () => { closeMoreSheet(); logout(); });
 
 /* demo mode link (added dynamically under the setup note) */
 (function addDemoLink(){
@@ -1927,10 +3368,10 @@ $('#apiUrlSave').addEventListener('click', () => {
 
 /* ---------------- BACKUP DATABASE (Excel, satu file semua tabel) ----------------
    Murni untuk jaga-jaga: unduh salinan semua data (Siswa, Absensi, Pelanggaran,
-   Konseling, Kolaborasi, 7 Kebiasaan) jadi satu file .xlsx, satu tab per jenis
+   Konseling, Kolaborasi) jadi satu file .xlsx, satu tab per jenis
    data. Tidak mengubah data apapun di Sheet — cuma membaca STATE yang sedang
    dimuat lalu menuliskannya ke file baru di komputer pengguna. */
-const BACKUP_SHEET_NAMES = { siswa:'Siswa', absensi:'Absensi', pelanggaran:'Pelanggaran', konseling:'Konseling', kolaborasi:'Kolaborasi', kebiasaan:'Kebiasaan' };
+const BACKUP_SHEET_NAMES = { siswa:'Siswa', absensi:'Absensi', pelanggaran:'Pelanggaran', konseling:'Konseling', kolaborasi:'Kolaborasi' };
 function downloadFullBackup(){
   if (!TYPES.some(t => STATE[t] && STATE[t].length)){
     toast('Belum ada data yang bisa di-backup. Muat ulang data terlebih dahulu.', 'error');
@@ -1946,15 +3387,106 @@ function downloadFullBackup(){
     const ws = rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([['(Belum ada data)']]);
     XLSX.utils.book_append_sheet(wb, ws, BACKUP_SHEET_NAMES[type] || type);
   });
+  const lulusRows = (STATE.siswaLulus || []).map(({ _row, ...clean }) => clean);
+  XLSX.utils.book_append_sheet(wb, lulusRows.length ? XLSX.utils.json_to_sheet(lulusRows) : XLSX.utils.aoa_to_sheet([['(Belum ada data)']]), 'SiswaLulus');
   const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
   XLSX.writeFile(wb, `Backup_BKDigital_${stamp}.xlsx`);
   toast('Backup berhasil diunduh.', 'success');
 }
 
 /* Settings button lets user change/reset API URL */
+/* Ubah file gambar yang dipilih user jadi base64 data URL yang sudah diperkecil
+   (resize + kompres), supaya cukup kecil untuk disimpan dalam SATU sel Google
+   Sheets (batas ±50.000 karakter per sel) — bukan cuma disimpan di localStorage. */
+function resizeImageToDataUrl(file, maxDim = 512, maxChars = 45000){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let w = img.width, h = img.height;
+        const scale = Math.min(1, maxDim / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+
+        const draw = (cw, ch) => {
+          canvas.width = cw; canvas.height = ch;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cw, ch); // latar putih agar tidak jadi hitam saat diubah ke JPEG
+          ctx.drawImage(img, 0, 0, cw, ch);
+        };
+        draw(w, h);
+
+        let quality = 0.85;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        while (dataUrl.length > maxChars && quality > 0.35){
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+        while (dataUrl.length > maxChars && Math.min(w, h) > 32){
+          w = Math.round(w * 0.85); h = Math.round(h * 0.85);
+          draw(w, h);
+          dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        }
+        if (dataUrl.length > maxChars){
+          reject(new Error('Gambar terlalu kompleks untuk dijadikan logo. Coba gambar lain yang lebih sederhana (mis. logo polos berbentuk PNG/JPG).'));
+          return;
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('File bukan gambar yang valid.'));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error('Gagal membaca file gambar.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 function openSettings(){
-  $('#modalTitle').textContent = 'Pengaturan Koneksi';
+  $('#modalTitle').textContent = 'Pengaturan';
   $('#modalBody').innerHTML = `
+    <div class="field full backup-box profile-box">
+      <label>Profil Sekolah</label>
+      <p class="muted" style="margin:2px 0 10px">Tampil di halaman Dashboard. Tersimpan di Google Sheet (sheet "Pengaturan") sehingga otomatis muncul lagi di perangkat/browser manapun yang login ke Web App yang sama.</p>
+      <div class="field full" style="margin-bottom:12px">
+        <label>Nama Sekolah</label>
+        <input type="text" id="settingsSchoolName" value="${escapeHtml(SCHOOL_NAME)}" placeholder="Contoh: SMA Negeri 1 Harapan" />
+      </div>
+      <div class="field full" style="margin-bottom:12px">
+        <label>Tahun Pelajaran Aktif</label>
+        <input type="text" id="settingsSchoolYear" value="${escapeHtml(SCHOOL_YEAR)}" placeholder="Contoh: 2025/2026" />
+      </div>
+      <div class="field full" style="margin-bottom:12px">
+        <label>Kota / Tempat Tanda Tangan</label>
+        <input type="text" id="settingsSchoolCity" value="${escapeHtml(SCHOOL_CITY)}" placeholder="Contoh: Sragi" />
+        <p class="muted" style="margin-top:4px;font-size:11.5px">Dipakai di kaki laporan cetak, contoh: “Sragi, 15 September 2026”.</p>
+      </div>
+      <div class="field full" style="margin-bottom:12px">
+        <label>Nama Guru BK (penanda tangan)</label>
+        <input type="text" id="settingsBkName" value="${escapeHtml(SCHOOL_BK_NAME)}" placeholder="Contoh: SURYA IHZA MAHISTA, S.Pd" />
+      </div>
+      <div class="field full" style="margin-bottom:12px">
+        <label>NIP Guru BK</label>
+        <input type="text" id="settingsBkNip" value="${escapeHtml(SCHOOL_BK_NIP)}" placeholder="Contoh: 19900101 201501 1 001 (isi - bila tidak ada)" />
+      </div>
+      <div class="field full" style="margin-bottom:4px">
+        <label>Logo Sekolah</label>
+        <div class="logo-upload-row">
+          <div class="logo-preview" id="settingsLogoPreviewWrap">
+            ${SCHOOL_LOGO ? `<img id="settingsLogoPreview" src="${escapeHtml(SCHOOL_LOGO)}" alt="Logo" />` : `<i class="fa-solid fa-image"></i>`}
+          </div>
+          <div class="logo-upload-actions">
+            <input type="file" id="settingsLogoFile" accept="image/*" class="hidden" />
+            <button class="btn btn-ghost" id="settingsLogoBtn" type="button"><i class="fa-solid fa-upload"></i> Upload Logo</button>
+            <button class="btn btn-ghost" id="settingsLogoRemoveBtn" type="button" style="${SCHOOL_LOGO ? '' : 'display:none'}"><i class="fa-solid fa-trash"></i> Hapus</button>
+          </div>
+        </div>
+        <p class="muted" style="margin-top:6px;font-size:11.5px">Logo otomatis diperkecil & dikompres agar muat disimpan di Google Sheet.</p>
+      </div>
+      <button class="btn btn-primary" id="settingsProfileSaveBtn" type="button" style="margin-top:14px"><i class="fa-solid fa-check"></i> Simpan Profil Sekolah</button>
+    </div>
+
     <div class="field full" style="margin-bottom:16px">
       <label>URL Web App Google Apps Script</label>
       <input type="url" id="settingsApiUrl" value="${escapeHtml(API_URL)}" placeholder="https://script.google.com/macros/s/xxxxx/exec" />
@@ -1965,13 +3497,72 @@ function openSettings(){
     </div>
     <div class="field full backup-box">
       <label>Backup Database</label>
-      <p class="muted" style="margin:2px 0 10px">Unduh salinan semua data (Siswa, Absensi, Pelanggaran, Konseling, Kolaborasi, 7 Kebiasaan) jadi satu file Excel — untuk jaga-jaga, tidak mengubah data apapun di Sheet.</p>
+      <p class="muted" style="margin:2px 0 10px">Unduh salinan semua data (Siswa, Absensi, Pelanggaran, Konseling, Kolaborasi) jadi satu file Excel — untuk jaga-jaga, tidak mengubah data apapun di Sheet.</p>
       <button class="btn btn-ghost" id="settingsBackupBtn" type="button"><i class="fa-solid fa-file-arrow-down"></i> Unduh Backup (Excel)</button>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="settingsDemoBtn" type="button">Gunakan Mode Demo</button>
       <button class="btn btn-primary" id="settingsSaveBtn" type="button"><i class="fa-solid fa-check"></i> Simpan &amp; Muat Ulang</button>
     </div>`;
+
+  // ---- Profil Sekolah ----
+  let pendingLogoDataUrl = SCHOOL_LOGO;
+  $('#settingsLogoBtn').addEventListener('click', () => $('#settingsLogoFile').click());
+  $('#settingsLogoFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')){ toast('File harus berupa gambar.', 'error'); return; }
+    const btn = $('#settingsLogoBtn');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Memproses...';
+    try{
+      pendingLogoDataUrl = await resizeImageToDataUrl(file);
+      $('#settingsLogoPreviewWrap').innerHTML = `<img id="settingsLogoPreview" src="${escapeHtml(pendingLogoDataUrl)}" alt="Logo" />`;
+      $('#settingsLogoRemoveBtn').style.display = '';
+    }catch(err){
+      toast(err.message, 'error');
+    }finally{
+      btn.disabled = false; btn.innerHTML = originalLabel;
+      e.target.value = '';
+    }
+  });
+  $('#settingsLogoRemoveBtn').addEventListener('click', () => {
+    pendingLogoDataUrl = '';
+    $('#settingsLogoPreviewWrap').innerHTML = `<i class="fa-solid fa-image"></i>`;
+    $('#settingsLogoRemoveBtn').style.display = 'none';
+  });
+  $('#settingsProfileSaveBtn').addEventListener('click', async () => {
+    const name = $('#settingsSchoolName').value.trim();
+    const year = $('#settingsSchoolYear').value.trim();
+    const city = $('#settingsSchoolCity').value.trim();
+    const bkName = $('#settingsBkName').value.trim();
+    const bkNip = $('#settingsBkNip').value.trim();
+    const logo = pendingLogoDataUrl || '';
+    const btn = $('#settingsProfileSaveBtn');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+    try{
+      await adapter.saveSettings({ NamaSekolah: name, TahunPelajaran: year, LogoSekolah: logo,
+        KotaSekolah: city, NamaGuruBK: bkName, NipGuruBK: bkNip });
+      SCHOOL_NAME = name; SCHOOL_YEAR = year; SCHOOL_LOGO = logo;
+      SCHOOL_CITY = city; SCHOOL_BK_NAME = bkName; SCHOOL_BK_NIP = bkNip;
+      localStorage.setItem('bk_school_city', SCHOOL_CITY);
+      localStorage.setItem('bk_school_bk_name', SCHOOL_BK_NAME);
+      localStorage.setItem('bk_school_bk_nip', SCHOOL_BK_NIP);
+      localStorage.setItem('bk_school_name', SCHOOL_NAME);
+      localStorage.setItem('bk_school_year', SCHOOL_YEAR);
+      if (SCHOOL_LOGO) localStorage.setItem('bk_school_logo', SCHOOL_LOGO);
+      else localStorage.removeItem('bk_school_logo');
+      renderSchoolProfile();
+      toast('Profil sekolah disimpan ke Google Sheet.', 'success');
+    }catch(err){
+      toast('Gagal menyimpan profil sekolah: ' + err.message, 'error');
+    }finally{
+      btn.disabled = false; btn.innerHTML = originalLabel;
+    }
+  });
+
+  // ---- Koneksi & backup ----
   $('#settingsBackupBtn').addEventListener('click', downloadFullBackup);
   $('#settingsSaveBtn').addEventListener('click', () => {
     const val = $('#settingsApiUrl').value.trim();
@@ -1992,6 +3583,416 @@ function openSettings(){
 }
 $('#settingsBtn').addEventListener('click', openSettings);
 $('#settingsBtnMobile').addEventListener('click', () => { closeMoreSheet(); openSettings(); });
+$('#guruAccountsBtn').addEventListener('click', () => openGuruAccounts());
+$('#guruAccountsBtnMobile').addEventListener('click', () => { closeMoreSheet(); openGuruAccounts(); });
+$('#konselorAccountsBtn').addEventListener('click', () => openKonselorAccounts());
+$('#konselorAccountsBtnMobile').addEventListener('click', () => { closeMoreSheet(); openKonselorAccounts(); });
+
+/* ---------------- KELOLA AKUN GURU MAPEL ----------------
+   Admin/Guru BK menambah, mengedit, dan menghapus akun login guru mapel
+   dari sini. Kelas diketik dipisah koma (mis. "VII-A, VII-B") — itulah
+   satu-satunya kelas yang bisa dilihat/dicatat pelanggarannya oleh akun ini,
+   ditegakkan di server (lihat Code.gs), bukan cuma disembunyikan di tampilan. */
+function openGuruAccounts(){
+  $('#modalTitle').textContent = 'Kelola Akun Guru Mapel';
+  let editingId = null;
+
+  $('#modalBody').innerHTML = `
+    <p class="muted" style="margin:0 0 14px">Setiap akun di bawah bisa login (tanpa perlu tahu URL Web App/token) dan hanya melihat &amp; mencatat Pelanggaran untuk kelas yang kamu tulis di sini.</p>
+    <form id="guruAccountForm">
+      <div class="form-grid">
+        <div class="field"><label>Nama Guru</label>
+          <input type="text" id="gaNama" placeholder="Contoh: Budi Santoso, S.Pd" required />
+        </div>
+        <div class="field"><label>Username</label>
+          <input type="text" id="gaUsername" placeholder="Contoh: budi.santoso" required autocomplete="off" />
+        </div>
+        <div class="field"><label>Password</label>
+          <input type="text" id="gaPassword" placeholder="${'Isi/ganti password'}" />
+        </div>
+        <div class="field"><label>Status</label>
+          <select id="gaStatus">
+            <option value="Aktif">Aktif</option>
+            <option value="Nonaktif">Nonaktif</option>
+          </select>
+        </div>
+        <div class="field full"><label>Kelas Tanggung Jawab</label>
+          <input type="text" id="gaKelas" placeholder="Contoh: VII-A, VII-B (pisahkan dengan koma) — kosongkan untuk akses ke SEMUA kelas" />
+        </div>
+      </div>
+      <p class="muted" style="margin:-8px 0 14px">Kosongkan kolom Kelas kalau guru ini boleh mencatat pelanggaran untuk semua kelas, bukan hanya kelas tertentu.</p>
+      <div class="modal-actions" style="justify-content:flex-start; margin-bottom:18px">
+        <button type="submit" class="btn btn-primary" id="gaSubmitBtn"><i class="fa-solid fa-plus"></i> Tambah Akun</button>
+        <button type="button" class="btn btn-ghost hidden" id="gaCancelEditBtn">Batal Edit</button>
+      </div>
+    </form>
+    <div class="bulk-siswa-list" id="gaList" style="max-height:280px"></div>
+    <div class="field full backup-box" style="margin-top:14px">
+      <label>Import Banyak Akun Sekaligus dari Excel</label>
+      <p class="muted" style="margin:2px 0 10px">Unduh template, isi daftar guru di Excel, lalu upload lagi. Akun yang Username-nya sudah ada akan dilewati (tidak menimpa password yang sudah ada).</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-ghost" id="btnDownloadGuruTemplate" type="button"><i class="fa-solid fa-file-arrow-down"></i> Unduh Template</button>
+        <button class="btn btn-ghost" id="btnImportGuru" type="button"><i class="fa-solid fa-file-arrow-up"></i> Import dari Excel</button>
+        <input type="file" id="importGuruFile" accept=".xlsx,.xls,.csv" class="hidden" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="gaCloseBtn">Tutup</button>
+    </div>`;
+
+  function renderList(){
+    const list = $('#gaList');
+    const rows = STATE.guru.slice().sort((a,b) => (a.Nama||'').localeCompare(b.Nama||''));
+    if (!rows.length){
+      list.innerHTML = `<p class="muted" style="padding:8px">Belum ada akun Guru Mapel. Tambahkan lewat form di atas.</p>`;
+      return;
+    }
+    list.innerHTML = rows.map(g => `
+      <div class="bulk-item mpl-item">
+        <span class="mpl-info"><b>${escapeHtml(g.Nama||'-')}</b> <span class="muted">· @${escapeHtml(g.Username||'-')} · ${g.Kelas ? escapeHtml(g.Kelas) : 'Semua Kelas'} · ${escapeHtml(g.Status||'Aktif')}</span></span>
+        <span class="search-dd-actions">
+          <button type="button" class="icon-btn-sm" data-ga-edit="${escapeHtml(g.ID)}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+          <button type="button" class="icon-btn-sm danger" data-ga-del="${escapeHtml(g.ID)}" title="Hapus"><i class="fa-solid fa-trash"></i></button>
+        </span>
+      </div>`).join('');
+  }
+  renderList();
+
+  $('#gaList').addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-ga-edit]');
+    const delBtn = e.target.closest('[data-ga-del]');
+    if (editBtn){
+      const g = STATE.guru.find(o => String(o.ID)===String(editBtn.dataset.gaEdit));
+      if (!g) return;
+      editingId = g.ID;
+      $('#gaNama').value = g.Nama || '';
+      $('#gaUsername').value = g.Username || '';
+      $('#gaPassword').value = '';
+      $('#gaPassword').placeholder = 'Kosongkan jika tidak ingin mengubah password';
+      $('#gaStatus').value = g.Status || 'Aktif';
+      $('#gaKelas').value = g.Kelas || '';
+      $('#gaSubmitBtn').innerHTML = '<i class="fa-solid fa-check"></i> Update Akun';
+      $('#gaCancelEditBtn').classList.remove('hidden');
+      $('#gaNama').focus();
+      return;
+    }
+    if (delBtn){
+      if (!confirm('Hapus akun guru mapel ini? Guru yang bersangkutan tidak akan bisa login lagi.')) return;
+      const id = delBtn.dataset.gaDel;
+      try{
+        await adapter.delete('guru', id);
+        STATE.guru = STATE.guru.filter(o => String(o.ID)!==String(id));
+        renderList();
+        toast('Akun guru mapel dihapus.', 'success');
+      }catch(err){
+        toast(err.message, 'error');
+      }
+    }
+  });
+
+  $('#gaCancelEditBtn').addEventListener('click', () => {
+    editingId = null;
+    $('#guruAccountForm').reset();
+    $('#gaPassword').placeholder = 'Isi/ganti password';
+    $('#gaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
+    $('#gaCancelEditBtn').classList.add('hidden');
+  });
+
+  $('#guruAccountForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nama = $('#gaNama').value.trim();
+    const username = $('#gaUsername').value.trim();
+    const password = $('#gaPassword').value;
+    const status = $('#gaStatus').value;
+    const kelas = $('#gaKelas').value.trim();
+    if (!nama || !username){ toast('Nama dan Username wajib diisi.', 'error'); return; }
+    if (!editingId && !password){ toast('Password wajib diisi untuk akun baru.', 'error'); return; }
+    const btn = $('#gaSubmitBtn');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+    try{
+      const data = { Nama: nama, Username: username, Status: status, Kelas: kelas };
+      if (password) data.Password = password;
+      if (editingId){
+        const updated = await adapter.update('guru', editingId, data);
+        const idx = STATE.guru.findIndex(o => String(o.ID)===String(editingId));
+        if (idx > -1) STATE.guru[idx] = { ...STATE.guru[idx], ...updated, ...data, ID: editingId };
+        toast('Akun guru mapel diperbarui.', 'success');
+      } else {
+        const created = await adapter.create('guru', data);
+        STATE.guru.push({ ...data, ...created });
+        toast('Akun guru mapel ditambahkan.', 'success');
+      }
+      editingId = null;
+      $('#guruAccountForm').reset();
+      $('#gaPassword').placeholder = 'Isi/ganti password';
+      $('#gaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
+      $('#gaCancelEditBtn').classList.add('hidden');
+      renderList();
+    }catch(err){
+      toast(err.message, 'error');
+    }finally{
+      btn.disabled = false; btn.innerHTML = originalLabel;
+    }
+  });
+
+  $('#gaCloseBtn').addEventListener('click', closeModal);
+
+  /* ---- Import banyak akun guru sekaligus dari Excel ----
+     Kolom Kelas boleh dikosongkan di template -> guru itu otomatis dapat
+     akses ke SEMUA kelas (lihat kelasListIncludes() di Code.gs). Username
+     yang sudah ada di database DILEWATI (tidak menimpa password lama),
+     sama seperti prinsip import Data Siswa. */
+  const GURU_TEMPLATE_COLUMNS = ['Nama','Username','Password','Kelas','Status'];
+  function downloadGuruTemplate(){
+    const contoh = { Nama:'Budi Santoso, S.Pd', Username:'budi.santoso', Password:'password123', Kelas:'VII-A, VII-B', Status:'Aktif' };
+    const contoh2 = { Nama:'Siti Aminah, S.Pd', Username:'siti.aminah', Password:'password123', Kelas:'', Status:'Aktif' };
+    const ws = XLSX.utils.json_to_sheet([contoh, contoh2], { header: GURU_TEMPLATE_COLUMNS });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Guru');
+    XLSX.writeFile(wb, 'Template_Import_AkunGuru_BKDigital.xlsx');
+  }
+  $('#btnDownloadGuruTemplate').addEventListener('click', downloadGuruTemplate);
+
+  $('#btnImportGuru').addEventListener('click', () => $('#importGuruFile').click());
+  $('#importGuruFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    showLoading(true);
+    try{
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type:'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval:'' });
+      const cleaned = rows
+        .map(r => {
+          const o = {};
+          GURU_TEMPLATE_COLUMNS.forEach(c => { o[c] = (r[c] !== undefined ? String(r[c]).trim() : ''); });
+          if (!o.Status) o.Status = 'Aktif';
+          return o;
+        })
+        .filter(r => r.Nama && r.Username && r.Password); // baris tanpa Nama/Username/Password diabaikan
+      if (!cleaned.length){ toast('Tidak ada baris valid (butuh minimal kolom Nama, Username & Password).', 'error'); return; }
+      const result = await adapter.importBulk('guru', cleaned, 'Username');
+      const batch = await adapter.getAllBatch();
+      STATE.guru = batch.guru || [];
+      renderList();
+      toast(`Import selesai: ${result.added} akun guru baru ditambahkan, ${result.skipped} dilewati (Username sudah ada).`, 'success');
+    }catch(err){
+      toast('Gagal mengimpor file: ' + err.message, 'error');
+    }finally{
+      showLoading(false);
+      e.target.value = '';
+    }
+  });
+
+  openModal();
+}
+
+/* ---------------- KELOLA AKUN KONSELOR (GURU BK PER-KELAS) ----------------
+   Sama persis polanya dengan openGuruAccounts(), tapi untuk sheet "Konselor"
+   dan menu Konseling: setiap akun di sini hanya bisa login (tanpa perlu tahu
+   URL Web App/token) dan hanya melihat & mencatat KONSELING untuk kelas yang
+   kamu tulis di sini — cocok dipakai supaya masing-masing Guru BK di sekolah
+   yang sama hanya mengelola laporan konseling murid asuhnya sendiri.
+   "Password" di sini bisa diisi PIN pendek (mis. 4-6 digit) kalau mau lebih
+   simpel buat Guru BK — nilainya tetap disimpan sebagai teks di sheet, jadi
+   bebas dipilih Admin selama mudah diingat & tidak mudah ditebak orang lain. */
+function openKonselorAccounts(){
+  $('#modalTitle').textContent = 'Kelola Akun Guru BK (Konselor)';
+  let editingId = null;
+
+  $('#modalBody').innerHTML = `
+    <p class="muted" style="margin:0 0 14px">Setiap akun di bawah bisa login (tanpa perlu tahu URL Web App/token) dan hanya melihat &amp; mencatat <b>Konseling</b> untuk siswa di kelas yang kamu tulis di sini. Password bisa diisi PIN pendek supaya mudah diingat.</p>
+    <form id="konselorAccountForm">
+      <div class="form-grid">
+        <div class="field"><label>Nama Guru BK</label>
+          <input type="text" id="kaNama" placeholder="Contoh: Ratna Wijaya, S.Pd" required />
+        </div>
+        <div class="field"><label>Username</label>
+          <input type="text" id="kaUsername" placeholder="Contoh: ratna.wijaya" required autocomplete="off" />
+        </div>
+        <div class="field"><label>Password / PIN</label>
+          <input type="text" id="kaPassword" placeholder="${'Isi/ganti password atau PIN'}" />
+        </div>
+        <div class="field"><label>Status</label>
+          <select id="kaStatus">
+            <option value="Aktif">Aktif</option>
+            <option value="Nonaktif">Nonaktif</option>
+          </select>
+        </div>
+        <div class="field full"><label>Kelas Tanggung Jawab</label>
+          <input type="text" id="kaKelas" placeholder="Contoh: VII-A, VII-B (pisahkan dengan koma) — kosongkan untuk akses ke SEMUA kelas" />
+        </div>
+      </div>
+      <p class="muted" style="margin:-8px 0 14px">Kosongkan kolom Kelas kalau Guru BK ini boleh mencatat konseling untuk semua kelas, bukan hanya kelas tertentu.</p>
+      <div class="modal-actions" style="justify-content:flex-start; margin-bottom:18px">
+        <button type="submit" class="btn btn-primary" id="kaSubmitBtn"><i class="fa-solid fa-plus"></i> Tambah Akun</button>
+        <button type="button" class="btn btn-ghost hidden" id="kaCancelEditBtn">Batal Edit</button>
+      </div>
+    </form>
+    <div class="bulk-siswa-list" id="kaList" style="max-height:280px"></div>
+    <div class="field full backup-box" style="margin-top:14px">
+      <label>Import Banyak Akun Sekaligus dari Excel</label>
+      <p class="muted" style="margin:2px 0 10px">Unduh template, isi daftar Guru BK di Excel, lalu upload lagi. Akun yang Username-nya sudah ada akan dilewati (tidak menimpa password/PIN yang sudah ada).</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-ghost" id="btnDownloadKonselorTemplate" type="button"><i class="fa-solid fa-file-arrow-down"></i> Unduh Template</button>
+        <button class="btn btn-ghost" id="btnImportKonselor" type="button"><i class="fa-solid fa-file-arrow-up"></i> Import dari Excel</button>
+        <input type="file" id="importKonselorFile" accept=".xlsx,.xls,.csv" class="hidden" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="kaCloseBtn">Tutup</button>
+    </div>`;
+
+  function renderList(){
+    const list = $('#kaList');
+    const rows = STATE.konselor.slice().sort((a,b) => (a.Nama||'').localeCompare(b.Nama||''));
+    if (!rows.length){
+      list.innerHTML = `<p class="muted" style="padding:8px">Belum ada akun Guru BK (Konselor). Tambahkan lewat form di atas.</p>`;
+      return;
+    }
+    list.innerHTML = rows.map(k => `
+      <div class="bulk-item mpl-item">
+        <span class="mpl-info"><b>${escapeHtml(k.Nama||'-')}</b> <span class="muted">· @${escapeHtml(k.Username||'-')} · ${k.Kelas ? escapeHtml(k.Kelas) : 'Semua Kelas'} · ${escapeHtml(k.Status||'Aktif')}</span></span>
+        <span class="search-dd-actions">
+          <button type="button" class="icon-btn-sm" data-ka-edit="${escapeHtml(k.ID)}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+          <button type="button" class="icon-btn-sm danger" data-ka-del="${escapeHtml(k.ID)}" title="Hapus"><i class="fa-solid fa-trash"></i></button>
+        </span>
+      </div>`).join('');
+  }
+  renderList();
+
+  $('#kaList').addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-ka-edit]');
+    const delBtn = e.target.closest('[data-ka-del]');
+    if (editBtn){
+      const k = STATE.konselor.find(o => String(o.ID)===String(editBtn.dataset.kaEdit));
+      if (!k) return;
+      editingId = k.ID;
+      $('#kaNama').value = k.Nama || '';
+      $('#kaUsername').value = k.Username || '';
+      $('#kaPassword').value = '';
+      $('#kaPassword').placeholder = 'Kosongkan jika tidak ingin mengubah password/PIN';
+      $('#kaStatus').value = k.Status || 'Aktif';
+      $('#kaKelas').value = k.Kelas || '';
+      $('#kaSubmitBtn').innerHTML = '<i class="fa-solid fa-check"></i> Update Akun';
+      $('#kaCancelEditBtn').classList.remove('hidden');
+      $('#kaNama').focus();
+      return;
+    }
+    if (delBtn){
+      if (!confirm('Hapus akun Guru BK (Konselor) ini? Guru BK yang bersangkutan tidak akan bisa login lagi.')) return;
+      const id = delBtn.dataset.kaDel;
+      try{
+        await adapter.delete('konselor', id);
+        STATE.konselor = STATE.konselor.filter(o => String(o.ID)!==String(id));
+        renderList();
+        toast('Akun Guru BK dihapus.', 'success');
+      }catch(err){
+        toast(err.message, 'error');
+      }
+    }
+  });
+
+  $('#kaCancelEditBtn').addEventListener('click', () => {
+    editingId = null;
+    $('#konselorAccountForm').reset();
+    $('#kaPassword').placeholder = 'Isi/ganti password atau PIN';
+    $('#kaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
+    $('#kaCancelEditBtn').classList.add('hidden');
+  });
+
+  $('#konselorAccountForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nama = $('#kaNama').value.trim();
+    const username = $('#kaUsername').value.trim();
+    const password = $('#kaPassword').value;
+    const status = $('#kaStatus').value;
+    const kelas = $('#kaKelas').value.trim();
+    if (!nama || !username){ toast('Nama dan Username wajib diisi.', 'error'); return; }
+    if (!editingId && !password){ toast('Password/PIN wajib diisi untuk akun baru.', 'error'); return; }
+    const btn = $('#kaSubmitBtn');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+    try{
+      const data = { Nama: nama, Username: username, Status: status, Kelas: kelas };
+      if (password) data.Password = password;
+      if (editingId){
+        const updated = await adapter.update('konselor', editingId, data);
+        const idx = STATE.konselor.findIndex(o => String(o.ID)===String(editingId));
+        if (idx > -1) STATE.konselor[idx] = { ...STATE.konselor[idx], ...updated, ...data, ID: editingId };
+        toast('Akun Guru BK diperbarui.', 'success');
+      } else {
+        const created = await adapter.create('konselor', data);
+        STATE.konselor.push({ ...data, ...created });
+        toast('Akun Guru BK ditambahkan.', 'success');
+      }
+      editingId = null;
+      $('#konselorAccountForm').reset();
+      $('#kaPassword').placeholder = 'Isi/ganti password atau PIN';
+      $('#kaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
+      $('#kaCancelEditBtn').classList.add('hidden');
+      renderList();
+    }catch(err){
+      toast(err.message, 'error');
+    }finally{
+      btn.disabled = false; btn.innerHTML = originalLabel;
+    }
+  });
+
+  $('#kaCloseBtn').addEventListener('click', closeModal);
+
+  /* ---- Import banyak akun Konselor sekaligus dari Excel ----
+     Kolom Kelas boleh dikosongkan di template -> Guru BK itu otomatis dapat
+     akses ke SEMUA kelas. Username yang sudah ada di database DILEWATI
+     (tidak menimpa password/PIN lama), sama seperti prinsip import akun
+     Guru Mapel. */
+  const KONSELOR_TEMPLATE_COLUMNS = ['Nama','Username','Password','Kelas','Status'];
+  function downloadKonselorTemplate(){
+    const contoh = { Nama:'Ratna Wijaya, S.Pd', Username:'ratna.wijaya', Password:'123456', Kelas:'VIII-A, VIII-B', Status:'Aktif' };
+    const contoh2 = { Nama:'Andi Saputra, S.Pd', Username:'andi.saputra', Password:'654321', Kelas:'', Status:'Aktif' };
+    const ws = XLSX.utils.json_to_sheet([contoh, contoh2], { header: KONSELOR_TEMPLATE_COLUMNS });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Konselor');
+    XLSX.writeFile(wb, 'Template_Import_AkunKonselor_BKDigital.xlsx');
+  }
+  $('#btnDownloadKonselorTemplate').addEventListener('click', downloadKonselorTemplate);
+
+  $('#btnImportKonselor').addEventListener('click', () => $('#importKonselorFile').click());
+  $('#importKonselorFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    showLoading(true);
+    try{
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type:'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval:'' });
+      const cleaned = rows
+        .map(r => {
+          const o = {};
+          KONSELOR_TEMPLATE_COLUMNS.forEach(c => { o[c] = (r[c] !== undefined ? String(r[c]).trim() : ''); });
+          if (!o.Status) o.Status = 'Aktif';
+          return o;
+        })
+        .filter(r => r.Nama && r.Username && r.Password); // baris tanpa Nama/Username/Password diabaikan
+      if (!cleaned.length){ toast('Tidak ada baris valid (butuh minimal kolom Nama, Username & Password).', 'error'); return; }
+      const result = await adapter.importBulk('konselor', cleaned, 'Username');
+      const batch = await adapter.getAllBatch();
+      STATE.konselor = batch.konselor || [];
+      renderList();
+      toast(`Import selesai: ${result.added} akun Guru BK baru ditambahkan, ${result.skipped} dilewati (Username sudah ada).`, 'success');
+    }catch(err){
+      toast('Gagal mengimpor file: ' + err.message, 'error');
+    }finally{
+      showLoading(false);
+      e.target.value = '';
+    }
+  });
+
+  openModal();
+}
 
 /* ---------------- MOBILE HAMBURGER (opens sidebar-equivalent: more sheet w/ full nav) ---------------- */
 $('#hamburgerBtn').addEventListener('click', openMoreSheet);
@@ -2000,9 +4001,23 @@ $('#hamburgerBtn').addEventListener('click', openMoreSheet);
 (function init(){
   if (localStorage.getItem('bk_demo_mode') === '1'){
     adapter = DemoAdapter; DemoAdapter.seedIfEmpty(); enterApp();
-  } else if (API_URL){
+    return;
+  }
+  if (API_URL && API_TOKEN){
+    // Ada sesi tersimpan (admin ATAU guru mapel yang sudah pernah login) —
+    // langsung masuk, applyRoleUI() di dalam enterApp() yang menentukan
+    // tampilannya sesuai USER_ROLE yang tersimpan.
     $('#apiUrlInput').value = API_URL;
     $('#apiTokenInput').value = API_TOKEN;
     adapter = RealAdapter; enterApp();
+    return;
+  }
+  // Belum ada sesi aktif -> tampilkan layar login. Kalau URL Web App sudah
+  // ter-bake (DEFAULT_API_URL diisi admin saat deploy), asumsikan mayoritas
+  // pengunjung adalah Guru Mapel dan langsung tampilkan form Username/Password
+  // itu duluan, supaya mereka tidak perlu klik "Login sebagai Guru Mapel" dulu.
+  if (DEFAULT_API_URL){
+    $('#adminSetupCard').classList.add('hidden');
+    $('#guruLoginCard').classList.remove('hidden');
   }
 })();

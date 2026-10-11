@@ -4,6 +4,117 @@ Ringkasan perubahan dan cara memasangnya. Kode frontend (GitHub) dan data (Googl
 tetap terpisah seperti sebelumnya — **update kode ini tidak pernah menyentuh data yang
 sudah tersimpan di Sheet kamu.**
 
+## -4. PENTING (update terbaru) — Rekap Absensi format lembar sekolah
+
+Laporan **Rekap Absensi** sekarang punya pilihan baru **"Bentuk Rekap Absensi"** di
+halaman Laporan:
+
+1. **Grid Bulanan (format buku absensi)** — meniru lembar "ABSENSI KELAS" manual:
+   satu baris per siswa, kolom tanggal 1–31, sel diisi kode **S / I / A** (Hadir
+   sengaja dibiarkan kosong seperti di lembar aslinya), kolom **JUMLAH (S | I | A)**
+   dan **KETR** di ujung kanan, lalu rekap **PUTRA / PUTRI / TOTAL**, keterangan
+   kode, dan blok tanda tangan Guru BK. Wajib pilih **Kelas** + **Bulan**; otomatis
+   dicetak **landscape**. Semua siswa kelas itu tetap muncul barisnya walau belum
+   pernah dicatat absensinya.
+2. **Rekap per Siswa (per anak)** — satu baris per siswa: Hadir / Sakit / Izin /
+   Alpa, jumlah, dan **% kehadiran**, plus baris Total.
+3. **Rekap per Kelas** — total H/S/I/A tiap kelas untuk periode yang dipilih.
+4. **Rekap per Bulan** — bulan demi bulan; paling berguna kalau Periode dipilih
+   **Semester**, jadi satu semester terlihat dalam satu tabel.
+5. **Rincian Harian** — daftar catatan seperti versi sebelumnya (tidak berubah).
+
+Bentuk 2–4 mengikuti **Periode** yang dipilih (Harian / Bulanan / Semester / Semua
+Tanggal), jadi rekap per bulan & per semester tinggal ganti periodenya.
+
+Di **Pengaturan > Profil Sekolah** ada tiga isian baru untuk kaki laporan:
+**Kota/Tempat Tanda Tangan**, **Nama Guru BK**, dan **NIP Guru BK** (contoh hasil:
+"Sragi, 15 September 2026 / Guru BK / SURYA IHZA MAHISTA, S.Pd / NIP. -").
+
+Cukup ganti `index.html`, `script.js`, dan `style.css`. **Tidak ada perubahan
+`Code.gs` dan tidak ada perubahan struktur Sheet** — tiga isian baru tadi tersimpan
+sebagai baris key-value biasa di sheet **Pengaturan** yang sudah ada.
+
+## -3. PENTING (update sebelumnya) — Pengetatan Keamanan
+
+Karena `DEFAULT_API_URL` tertanam langsung di `script.js` (jadi terlihat publik kalau
+repo GitHub-nya publik), update ini menambahkan:
+
+1. **Proteksi brute-force di login Guru Mapel & Konselor** — setelah 5x gagal berturut-
+   turut, Username itu dikunci otomatis selama 15 menit (memakai `CacheService`, bukan
+   Sheet, jadi otomatis kadaluarsa sendiri). Tiap percobaan gagal juga diberi jeda ±1.2
+   detik supaya tebak-tebak otomatis jauh lebih lambat. **Wajib ganti `Code.gs`** untuk
+   dapat proteksi ini.
+2. **Menutup 6 celah stored-XSS** di fitur TTD Tanda Tangan, Bukti Foto Home Visit, dan
+   Logo Sekolah — semua sekarang di-escape sebelum ditampilkan. **Wajib ganti `script.js`**.
+3. **Kolom "Konselor" pada data Konseling kini otomatis "distempel"** nama akun Konselor
+   yang login saat membuat sesi baru (tidak bisa dipalsukan lewat DevTools), supaya
+   Laporan Konseling per-konselor selalu akurat.
+4. **BARU: Notifikasi email otomatis** ke Admin setiap kali ada akun Guru/Konselor yang
+   kena lockout brute-force (lihat poin 1). Secara default terkirim ke email pemilik
+   script ini — kalau mau kirim ke alamat lain, tambahkan Script Property
+   **`ALERT_EMAIL`** (Project Settings > Script Properties) berisi email tujuan.
+
+Tidak ada perubahan struktur Sheet di update ini — cukup timpa `Code.gs` & `script.js`,
+lalu deploy ulang Web App.
+
+## -2. PENTING (update sebelumnya) — ganti Code.gs lagi: TTD Siswa di Konseling
+
+Form **Tambah/Edit Sesi Konseling** sekarang punya kotak **Tanda Tangan / Paraf Siswa**
+(digambar langsung di layar pakai mouse atau jari di HP/tablet). Setelah sesi konseling
+selesai, minta siswa tanda tangan/paraf di kotak itu sebelum disimpan.
+
+- Tersimpan sebagai kolom baru **"TTD"** di sheet Konseling — kolom ini **otomatis
+  ditambahkan sendiri** ke sheet Konseling yang sudah ada (lewat `ensureHeaderColumns()`
+  di `Code.gs`), jadi tidak perlu edit manual header sheet, dan data konseling lama sama
+  sekali tidak tersentuh.
+- TTD ini otomatis ikut muncul di halaman **Laporan** (Rekap Konseling & Laporan Individu
+  Siswa), ditampilkan sebagai gambar kecil tepat di sebelah kolom **Tindak Lanjut** —
+  klik gambarnya untuk memperbesar.
+- Karena ada kolom baru, **wajib timpa ulang `Code.gs`** kamu (lihat langkah di bagian 1
+  di bawah), kalau tidak TTD yang digambar akan diam-diam terbuang karena backend lama
+  tidak mengenali kolom "TTD".
+
+## -1. PENTING (update sebelumnya) — ganti Code.gs lagi
+
+Update kali ini:
+
+1. **Konselor (Guru BK) sekarang boleh mencatat Kolaborasi, Absensi, dan Pelanggaran**,
+   tidak cuma Konseling seperti sebelumnya — dibatasi ke kelas tanggung jawabnya sama
+   seperti aturan Konseling. Ini murni perubahan aturan akses di `Code.gs`
+   (`ROLE_WRITABLE_TYPES`), jadi **wajib timpa ulang `Code.gs`** kamu, kalau tidak akun
+   Konselor akan tetap mendapat error "hanya bisa mencatat data Konseling" saat mencoba
+   menambah data lain.
+2. **Kolaborasi jenis "Home Visit" sekarang punya field Upload Bukti Foto** (bisa
+   diganti lagi lewat Edit). Foto disimpan sebagai kolom baru **"BuktiFoto"** di sheet
+   Kolaborasi — kolom ini **otomatis ditambahkan sendiri** ke sheet Kolaborasi yang
+   sudah ada (lewat `ensureHeaderColumns()` di `Code.gs`), jadi tidak perlu edit manual
+   header sheet, dan data lama sama sekali tidak tersentuh. Ini juga butuh `Code.gs`
+   baru supaya kolom itu benar-benar tersimpan (backend lama akan diam-diam membuang
+   data foto karena tidak mengenali kolomnya).
+
+Cara update `Code.gs`-nya sama seperti bagian 1 di bawah: timpa isi `Code.gs` di Apps
+Script Editor kamu dengan file `Code.gs` di paket ini, lalu **Deploy → Manage deployments
+→ pilih deployment aktif → Edit (ikon pensil) → Version: New version → Deploy** (supaya
+URL Web App tidak berubah, tidak perlu update ulang di layar login aplikasi).
+
+## 0. PENTING — update ini WAJIB ganti Code.gs lagi
+
+Update kali ini menambahkan penyimpanan **Profil Sekolah** (Nama Sekolah, Tahun
+Pelajaran, Logo) ke Google Sheet lewat sheet baru bernama **"Pengaturan"**, supaya
+identitas sekolah otomatis muncul lagi di perangkat/browser manapun — bukan cuma
+tersimpan di localStorage satu browser seperti sebelumnya. Update ini juga
+menambahkan **akun Guru Mapel** (lihat bagian 8) lewat sheet baru **"Guru"**.
+
+Karena itu, **Code.gs di Apps Script kamu wajib ditimpa ulang** dengan isi `Code.gs`
+yang ada di paket ini (langkah-langkahnya sama seperti bagian 1 di bawah). Kalau tidak
+diganti, tombol "Simpan Profil Sekolah" akan gagal dengan pesan error "Aksi POST tidak
+dikenal" karena backend lama belum mengenal aksi `saveSettings`, dan menu "Kelola Akun
+Guru Mapel" / login Guru Mapel juga belum akan berfungsi.
+
+Sheet "Pengaturan" dan "Guru" akan otomatis dibuat sendiri oleh backend saat pertama
+kali dipakai (klik "Simpan Profil Sekolah" / tambah akun guru pertama) — tidak perlu
+dibuat manual.
+
 ## 1. Kenapa harus ganti Code.gs?
 
 File `Code.gs` di folder ini adalah backend baru untuk Google Apps Script kamu. Backend
@@ -11,7 +122,7 @@ lama tidak ikut ter-upload ke GitHub (memang wajar, itu hidup terpisah di Apps S
 Editor kamu), jadi backend ini dibuat generik: dia otomatis membaca sheet yang sudah ada
 sesuai nama tab & header kolom yang dipakai aplikasi (Siswa, Absensi, Pelanggaran,
 Konseling, Kolaborasi) — **tidak menimpa data yang sudah ada**, hanya menambah kolom/sheet
-baru (misalnya "Kebiasaan") kalau belum ada.
+baru kalau belum ada.
 
 ### Cara pasang
 1. Buka Google Sheet database BK Digital kamu → **Extensions → Apps Script**.
@@ -55,7 +166,7 @@ segera diisi begitu deployment berhasil.
 
 ### a) Pencarian
 - Kotak pencarian di atas sekarang aktif di semua halaman (Siswa, Absensi, Pelanggaran,
-  Konseling, Kolaborasi, 7 Kebiasaan) — ketik untuk memfilter tabel/kartu yang sedang dibuka.
+  Konseling, Kolaborasi) — ketik untuk memfilter tabel/kartu yang sedang dibuka.
 - Ketik nama/NIS siswa dari halaman manapun → muncul dropdown hasil pencarian siswa.
   Klik salah satu hasil untuk langsung membuka **Laporan Individu** siswa itu (siap cetak).
 
@@ -69,47 +180,6 @@ segera diisi begitu deployment berhasil.
   ada, baik hasil input manual maupun import sebelumnya, **tidak akan pernah tertimpa**.
   Input manual lewat tombol "Tambah Siswa" tetap berfungsi seperti biasa dan bisa
   dipakai bergantian dengan import kapan saja.
-
-### c) Menu "7 Kebiasaan Anak Indonesia Hebat"
-- Menu baru di sidebar, mengikuti kolom pada formulir kertas yang kamu lampirkan:
-  Bangun Pagi, Beribadah (Subuh/Duhur/Ashar/Maghrib/Isya, Dhuha, Tadarus/Murajaah,
-  Lainnya), Berolahraga, Gemar Belajar, Makan Sehat dan Bergizi, Bermasyarakat,
-  Istirahat Cukup, plus Paraf Ortu, Paraf Guru, dan Catatan Guru.
-- Isi lewat tombol **Isi Formulir Harian**, lalu tampil sebagai kartu per siswa per hari.
-- Tombol cetak (ikon printer) di tiap kartu menampilkan formulir dalam layout mirip
-  formulir kertas aslinya, siap di-print/save as PDF.
-- Rekap kebiasaan juga otomatis muncul di **Laporan** (baik rekap per kelas maupun
-  laporan individu siswa).
-
-### d) Absensi barcode via kamera (fitur terbaru)
-- **Backend (`Code.gs`) berubah lagi** — sheet `Siswa` otomatis mendapat 2 kolom baru:
-  `Barcode` dan `FotoURL`, ditambahkan di ujung kanan tanpa mengganggu kolom/data yang
-  sudah ada. Ikuti lagi langkah **"Cara pasang"** di bagian 1 untuk menempel ulang
-  `Code.gs` versi terbaru ke Apps Script Editor, lalu **Deploy → Manage deployments →
-  Edit → Deploy versi baru**.
-- **Foto & kode barcode siswa**: buka **Data Siswa → Tambah/Edit Siswa**. Ada 2 field baru:
-  - **Foto Siswa** — upload atau ambil foto lewat kamera. Foto otomatis dikompres dan
-    disimpan langsung sebagai teks di dalam sel Google Sheet (tidak perlu Google Drive
-    atau layanan tambahan apapun).
-  - **Kode Barcode** — klik **Buat Otomatis** untuk membuat kode unik (berdasarkan NIS),
-    atau isi manual. Klik **Cetak Kartu Barcode** untuk mencetak kartu kecil berisi nama,
-    kelas, dan barcode siap ditempel/dilaminating jadi kartu absen siswa.
-  - Kolom `Barcode` juga tersedia opsional di template Import Excel kalau mau
-    menyiapkan kode untuk banyak siswa sekaligus tanpa upload foto satu-satu.
-- **Mode kamera di halaman Absensi**: klik tombol **"Mode Kamera (Barcode)"**.
-  - Kamera langsung nyala dan standby.
-  - Siswa tinggal menunjukkan kartu barcode ke kamera → sistem otomatis mencocokkan kode,
-    menampilkan foto + nama siswa selama beberapa detik, dan langsung menyimpan absensi
-    (default status "Hadir", bisa diganti ke Sakit/Izin lewat dropdown di pojok kanan atas
-    sebelum kartu dipindai).
-  - Setelah beberapa detik, layar otomatis kembali ke mode standby menunggu kartu
-    berikutnya — tidak perlu sentuh apa pun di antara siswa.
-  - Kalau kode tidak dikenali, atau siswa sudah tercatat absen hari itu, sistem akan
-    menampilkan pesan yang sesuai lalu kembali standby.
-  - Klik ikon ✕ di pojok kanan atas untuk menutup mode kamera (kamera otomatis dimatikan).
-  - Fitur ini memakai kamera perangkat (laptop/HP/tablet) langsung dari browser — pastikan
-    mengizinkan akses kamera saat diminta, dan pakai koneksi HTTPS (URL Web App Apps
-    Script sudah otomatis HTTPS).
 
 ## 5. Menjamin update kode tidak menghapus data
 
@@ -126,3 +196,141 @@ Jadi urutan aman untuk update ke depan: cukup update file frontend (`index.html`
 `Code.gs` ke Apps Script Editor lalu **Deploy → Manage deployments → Edit → Deploy versi
 baru** (pakai deployment yang sama supaya URL tidak berubah). Data di Sheet tidak akan
 terpengaruh oleh kedua langkah ini.
+
+## 6. Update performa (pemuatan data & Absen Massal lebih cepat)
+
+Backend `Code.gs` di paket ini menambahkan dua aksi baru:
+- `getAllBatch` — mengambil semua jenis data (Siswa, Absensi, dst) dalam **satu**
+  permintaan ke server, bukan 6 permintaan terpisah seperti sebelumnya. Halaman jadi
+  lebih responsif saat pertama dibuka atau saat klik tombol refresh.
+- `bulkInsert` — dipakai fitur **Absen Massal per Kelas** untuk menyimpan semua siswa
+  yang dicentang dalam satu permintaan, bukan satu-per-satu. Untuk kelas isi 30 siswa,
+  ini bisa jauh lebih cepat dibanding sebelumnya.
+
+**Wajib:** tempel ulang isi `Code.gs` yang baru ke Apps Script Editor (langkah sama
+seperti bagian 1 di atas), lalu **Deploy → Manage deployments → Edit → Deploy** versi
+baru (pakai deployment yang sama supaya URL tidak berubah). Kalau langkah ini
+dilewati, fitur lama tetap jalan normal (tidak error), hanya saja peningkatan
+kecepatannya belum aktif.
+
+## 7. Template Pelanggaran (dropdown Jenis Pelanggaran & Poin)
+
+Sekarang saat mencatat pelanggaran, **Jenis Pelanggaran** dipilih lewat dropdown
+(bukan ketik bebas), dan **Poin** otomatis terisi sesuai jenis yang dipilih —
+supaya konsisten antar guru. Ada juga opsi **"+ Jenis lainnya (ketik manual)"**
+kalau memang belum ada di daftar baku.
+
+- Tombol **Template Pelanggaran** (halaman Pelanggaran) untuk menambah/ubah/hapus
+  daftar Jenis Pelanggaran & Poin baku sekolah kapan saja.
+- Mengubah/menghapus item di Template **tidak** mengubah data pelanggaran siswa
+  yang sudah pernah tercatat sebelumnya — keduanya disimpan terpisah.
+- Backend `Code.gs` di paket ini menambahkan sheet baru **"MasterPelanggaran"**,
+  otomatis dibuat & diisi ~19 jenis pelanggaran umum saat pertama kali dipakai
+  (tetap bisa diubah/dihapus semuanya lewat menu Template Pelanggaran).
+
+**Wajib:** tempel ulang `Code.gs` yang baru ke Apps Script Editor (bagian 1) lalu
+**Deploy → Manage deployments → Edit → Deploy** versi baru (deployment yang sama,
+supaya URL tidak berubah), baru kemudian ganti `index.html`, `script.js`,
+`style.css` di GitHub seperti biasa.
+
+## 8. Akun Guru Mapel — supaya tiap guru bisa input & pantau Pelanggaran sendiri
+
+Sekarang guru mapel bisa punya akun login sendiri, **tanpa perlu tahu URL Web App
+atau ACCESS_TOKEN sama sekali** — mereka cukup diberi Username & Password. Setelah
+login, tampilan mereka otomatis dikepras: cuma menu **Pelanggaran** yang muncul
+(untuk mencatat & memantau), dan hanya untuk kelas yang kamu tentukan sebagai
+tanggung jawabnya. Pembatasan ini ditegakkan di server (Code.gs), bukan cuma
+disembunyikan di tampilan — jadi walau guru iseng buka DevTools, tetap tidak bisa
+mengintip/mengubah data Siswa, Absensi, Konseling, dll di luar akses tersebut.
+
+### a) Sekali saja: isi URL Web App bawaan di `script.js`
+
+Supaya guru tidak perlu tempel URL Apps Script sendiri, buka `script.js`, cari baris:
+
+```js
+const DEFAULT_API_URL = '';
+```
+
+Isi dengan URL Web App kamu (yang sama seperti yang kamu pakai sendiri sebagai
+Admin/Guru BK), lalu commit ulang ke GitHub / upload ulang. URL ini **bukan
+rahasia** (tanpa token, URL saja tidak bisa dipakai mengambil data apapun),
+jadi aman ikut ter-commit ke repo publik. Kalau field ini dikosongkan, aplikasi
+tetap berfungsi seperti sebelumnya (Admin isi URL manual di layar setup).
+
+### b) Buat akun untuk tiap guru
+
+1. Login sebagai Admin/Guru BK seperti biasa → klik **Pengaturan** → **Kelola Akun
+   Guru Mapel**.
+2. Isi Nama, Username, Password, dan **Kelas Tanggung Jawab** (pisahkan dengan
+   koma kalau lebih dari satu kelas, contoh: `VII-A, VII-B`).
+3. Klik Tambah Akun. Ulangi untuk tiap guru.
+4. Bagikan **satu link** situs BK Digital yang sama ke semua guru (link yang sama
+   persis dengan yang kamu pakai), plus Username & Password masing-masing lewat
+   jalur pribadi (WhatsApp/japri), bukan digabung dengan link publiknya.
+
+Guru tinggal buka link tersebut → kalau `DEFAULT_API_URL` sudah diisi, layar login
+Guru Mapel (Username & Password saja) akan langsung muncul duluan — tidak ada field
+URL/token yang perlu mereka isi.
+
+### c) Beberapa catatan penting
+
+- Password di sini disimpan **apa adanya (plain text)** di sheet "Guru" untuk
+  kesederhanaan (sesuai isi kolom yang kamu ketik di menu Kelola Akun). Siapapun
+  yang bisa membuka Google Sheet database ini otomatis bisa melihatnya — jadi
+  jangan bagikan akses "Editor" ke Sheet database ke sembarang orang, dan sarankan
+  guru tidak memakai password yang sama dengan akun penting lain.
+- Sesi login guru otomatis kadaluarsa setelah **16 jam** — kalau tiba-tiba tidak
+  bisa menyimpan lagi, minta mereka login ulang.
+- Nonaktifkan akun (ubah Status jadi "Nonaktif") kalau seorang guru pindah tugas —
+  tidak perlu dihapus kalau masih mau menyimpan riwayatnya.
+- Backup Excel (`Unduh Backup`) **tidak pernah ikut membawa akun Guru/Password** —
+  hanya data Siswa, Absensi, Pelanggaran, Konseling, dan Kolaborasi.
+
+**Wajib:** tempel ulang `Code.gs` yang baru ke Apps Script Editor (bagian 1) lalu
+**Deploy → Manage deployments → Edit → Deploy** versi baru (deployment yang sama),
+baru kemudian ganti `index.html`, `script.js`, `style.css` di GitHub.
+
+## 8. Laporan Pemanggilan Orang Tua & Home Visit dipisah + foto bisa diperbesar
+
+- Di halaman **Laporan**, "Rekap Kolaborasi" sekarang dipecah jadi dua pilihan
+  terpisah: **Rekap Pemanggilan Orang Tua** dan **Rekap Home Visit** — begitu
+  juga di **Laporan Individu Siswa**, keduanya tampil sebagai dua bagian
+  terpisah, bukan digabung seperti sebelumnya.
+- Khusus laporan **Home Visit**, foto bukti kunjungan ikut ditampilkan di
+  laporan (bukan cuma di kartu Kolaborasi), jadi siap dicetak/PDF lengkap
+  dengan buktinya.
+- Foto (di kartu Kolaborasi maupun di Laporan) sekarang **tidak lagi buka tab
+  baru** kalau diklik — muncul jendela pratinjau dengan tombol **perbesar /
+  perkecil** (juga bisa scroll mouse untuk zoom, klik foto untuk toggle
+  zoom, atau tombol Reset/X untuk menutup).
+
+Ini murni perubahan frontend (`index.html`, `script.js`, `style.css`) — tidak
+perlu update `Code.gs` untuk bagian ini.
+
+---
+
+## Update: Absensi Kamera — Scan Kartu QR
+
+Fitur dari versi `simulasibkbarcode` sudah digabung ke proyek ini.
+
+**Yang baru**
+- Kolom **Kode QR** di form Data Siswa (tombol *Buat Otomatis* → `BK-<NIS>`, preview QR, cetak 1 kartu).
+- Tombol **Cetak Kartu QR (Massal)** di halaman Data Siswa (ukuran kartu pelajar, 85,6×54 mm, tersusun di A4). Siswa yang belum punya kode dibuatkan otomatis & disimpan. Nama sekolah/tahun pelajaran diambil dari Profil Sekolah.
+- Tombol **Mode Kamera (QR)** di halaman Absensi: kamera standby, tunjukkan kartu → absen tersimpan otomatis (status Hadir/Sakit/Izin bisa dipilih), ada beep, deteksi absen ganda hari ini, ganti kamera depan/belakang, dan kolom ketik/pemindai USB-Bluetooth sebagai cadangan.
+- Kolom `Barcode` ikut di Template Excel import siswa.
+- File baru: `qrcode.min.js`, `html5-qrcode.min.js` (lokal, tidak butuh CDN). Service worker naik ke `bkdigital-v5`.
+
+**Wajib di backend (Code.gs)** — 1 baris. Di `DEFAULT_HEADERS`, tambahkan `'Barcode'` di akhir header Siswa:
+
+```js
+Siswa: ['ID','NIS','Nama','Kelas','JenisKelamin','TempatTglLahir','Alamat','NamaOrtu','NoHPOrtu','Catatan','Barcode'],
+```
+
+Lalu Deploy → Manage deployments → pensil → New version → Deploy. Kolom `Barcode` otomatis ditambahkan ke sheet Siswa yang sudah ada tanpa menyentuh data lama.
+
+**Hak akses**
+- Admin: semua fitur QR.
+- Konselor: bisa pakai Mode Kamera (hanya untuk siswa kelas tanggung jawabnya — ditolak server untuk kelas lain). Cetak massal disembunyikan karena butuh menulis ke data Siswa.
+- Guru Mapel: tidak punya akses (hanya menu Pelanggaran).
+
+**Catatan:** kamera di browser hanya jalan lewat HTTPS (GitHub Pages sudah HTTPS) atau localhost.
