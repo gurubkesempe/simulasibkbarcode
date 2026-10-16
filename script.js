@@ -212,6 +212,13 @@ const RealAdapter = {
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Gagal melakukan kelulusan siswa');
     return json.data;
+  },
+  /* Hapus massal Data Siswa: banyak siswa terpilih dihapus dalam SATU permintaan. */
+  async deleteSiswaBulk(ids){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'deleteBulk', type:'siswa', ids, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menghapus data siswa terpilih');
+    return json.data;
   }
 };
 
@@ -319,6 +326,14 @@ const DemoAdapter = {
     this.write('siswa', after);
     this.write('siswaLulus', arsip);
     return { deleted: before.length - after.length, archived: before.length - after.length };
+  },
+  /* Padanan deleteSiswaBulk di RealAdapter, murni di localStorage untuk mode demo. */
+  async deleteSiswaBulk(ids){
+    const idSet = new Set((ids||[]).map(String));
+    const before = this.read('siswa');
+    const after = before.filter(s => !idSet.has(String(s.ID)));
+    this.write('siswa', after);
+    return { deleted: before.length - after.length };
   },
   seedIfEmpty(){
     if (this.read('siswa').length) return;
@@ -1088,22 +1103,51 @@ function renderActivityList(){
 }
 
 /* ---------------- DATA SISWA ---------------- */
-function renderSiswa(searchQuery){
+/* ID siswa yang dicentang untuk Hapus Massal. Disimpan di luar renderSiswa()
+   supaya centang tidak hilang tiap kali tabel digambar ulang (mis. saat mengetik
+   di kolom pencarian). */
+const SISWA_SELECTED = new Set();
+
+function renderSiswa(){
+  // Kata kunci selalu dibaca langsung dari kotak pencarian, jadi konsisten walau
+  // renderSiswa() dipanggil dari centang/filter kelas/hapus (bukan hanya dari pencarian).
+  const q = (($('#globalSearch') && $('#globalSearch').value) || '').trim().toLowerCase();
   const kelas = $('#filterKelasSiswa').value;
+  const canBulk = USER_ROLE === 'admin'; // hapus massal hanya untuk Admin (ditegakkan juga di server)
   let rows = STATE.siswa.filter(s => !kelas || s.Kelas === kelas);
-  if (searchQuery) rows = rows.filter(s =>
-    (s.Nama||'').toLowerCase().includes(searchQuery) ||
-    (s.NIS||'').toString().toLowerCase().includes(searchQuery) ||
-    (s.NamaOrtu||'').toLowerCase().includes(searchQuery)
+  if (q) rows = rows.filter(s =>
+    (s.Nama||'').toLowerCase().includes(q) ||
+    (s.NIS||'').toString().toLowerCase().includes(q) ||
+    (s.NamaOrtu||'').toLowerCase().includes(q)
   );
+  // Urut abjad (A-Z) berdasarkan Nama; kalau namanya sama, urut lanjut berdasarkan Kelas.
+  rows = rows.slice().sort((a,b) =>
+    String(a.Nama||'').localeCompare(String(b.Nama||''), 'id', { sensitivity:'base' }) ||
+    String(a.Kelas||'').localeCompare(String(b.Kelas||''), 'id', { numeric:true })
+  );
+
+  // Buang centang untuk siswa yang sudah tidak ada (mis. baru dihapus).
+  const existingIds = new Set(STATE.siswa.map(s => String(s.ID)));
+  Array.from(SISWA_SELECTED).forEach(id => { if (!existingIds.has(id)) SISWA_SELECTED.delete(id); });
+  if (!canBulk) SISWA_SELECTED.clear();
+
+  $('#siswaCheckAllTh').classList.toggle('hidden', !canBulk);
   const tbody = $('#tableSiswa tbody');
   const emptyState = $('#page-siswa .empty-state');
-  if (!rows.length){ tbody.innerHTML=''; emptyState.style.display='block'; return; }
-  emptyState.style.display='none';
+  if (!rows.length){
+    tbody.innerHTML = '';
+    emptyState.style.display = 'block';
+    updateSiswaFooter(rows, kelas, q);
+    updateSiswaBulkUI(rows);
+    return;
+  }
+  emptyState.style.display = 'none';
   tbody.innerHTML = rows.map(s => {
     const pelanggaranCount = STATE.pelanggaran.filter(p => String(p.SiswaID)===String(s.ID)).length;
     const status = pelanggaranCount >= 3 ? { txt:'Perlu Perhatian', cls:'danger' } : pelanggaranCount >= 1 ? { txt:'Pemantauan', cls:'amber' } : { txt:'Baik', cls:'success' };
-    return `<tr>
+    const checked = SISWA_SELECTED.has(String(s.ID));
+    return `<tr${checked ? ' class="row-selected"' : ''}>
+      ${canBulk ? `<td class="col-check"><input type="checkbox" class="siswa-check" data-id="${escapeHtml(s.ID)}" ${checked ? 'checked' : ''} aria-label="Pilih ${escapeHtml(s.Nama||'siswa')}" /></td>` : ''}
       <td>${escapeHtml(s.NIS||'-')}</td>
       <td><div style="display:flex;align-items:center;gap:10px">
             <span class="avatar-ring" style="width:30px;height:30px;font-size:11px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
@@ -1120,7 +1164,78 @@ function renderSiswa(searchQuery){
           </div></td>
     </tr>`;
   }).join('');
+  updateSiswaFooter(rows, kelas, q);
+  updateSiswaBulkUI(rows);
 }
+
+/* Keterangan jumlah siswa di paling bawah tabel Data Siswa. */
+function updateSiswaFooter(rows, kelas, q){
+  const el = $('#siswaCountFooter');
+  if (!el) return;
+  const total = STATE.siswa.length;
+  const putra = rows.filter(isPutra).length;
+  const putri = rows.filter(isPutri).length;
+  const filtered = !!(kelas || q);
+  let txt = filtered
+    ? `Menampilkan <b>${rows.length}</b> dari <b>${total}</b> siswa`
+    : `Total <b>${total}</b> siswa`;
+  if (kelas) txt += ` · Kelas <b>${escapeHtml(kelas)}</b>`;
+  txt += ` &nbsp;|&nbsp; Laki-laki: <b>${putra}</b> · Perempuan: <b>${putri}</b>`;
+  el.innerHTML = txt;
+}
+
+/* Sinkronkan tombol "Hapus Terpilih" & kotak centang "pilih semua" dengan
+   siswa yang sedang tampil (sesuai filter kelas/pencarian). */
+function updateSiswaBulkUI(visibleRows){
+  const btn = $('#btnBulkDeleteSiswa');
+  const checkAll = $('#siswaCheckAll');
+  const n = SISWA_SELECTED.size;
+  if (btn){
+    btn.classList.toggle('hidden', USER_ROLE !== 'admin' || n === 0);
+    $('#bulkDeleteSiswaCount').textContent = n;
+  }
+  if (checkAll){
+    const visibleIds = visibleRows.map(s => String(s.ID));
+    const selectedVisible = visibleIds.filter(id => SISWA_SELECTED.has(id)).length;
+    checkAll.checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    checkAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+  }
+}
+
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.matches && t.matches('.siswa-check')){
+    const id = String(t.dataset.id);
+    if (t.checked) SISWA_SELECTED.add(id); else SISWA_SELECTED.delete(id);
+    t.closest('tr')?.classList.toggle('row-selected', t.checked);
+    renderSiswa(); // segarkan tombol/pilih-semua (centang tetap karena disimpan di SISWA_SELECTED)
+  } else if (t.id === 'siswaCheckAll'){
+    $all('#tableSiswa .siswa-check').forEach(cb => {
+      if (t.checked) SISWA_SELECTED.add(String(cb.dataset.id)); else SISWA_SELECTED.delete(String(cb.dataset.id));
+    });
+    renderSiswa();
+  }
+});
+
+$('#btnBulkDeleteSiswa')?.addEventListener('click', async () => {
+  if (USER_ROLE !== 'admin'){ toast('Hanya Admin/Guru BK utama yang bisa menghapus data massal.', 'error'); return; }
+  const ids = Array.from(SISWA_SELECTED);
+  if (!ids.length) return;
+  if (!confirm(`Yakin ingin menghapus ${ids.length} siswa terpilih dari Data Siswa?\n\nTindakan ini tidak dapat dibatalkan. (Kalau siswa ini sudah lulus, gunakan menu Kenaikan & Kelulusan supaya masuk arsip alumni.)`)) return;
+  showLoading(true);
+  try{
+    const result = await adapter.deleteSiswaBulk(ids);
+    const idSet = new Set(ids);
+    STATE.siswa = STATE.siswa.filter(s => !idSet.has(String(s.ID)));
+    SISWA_SELECTED.clear();
+    renderCurrentPage(); renderDashboard(); populateClassFilters();
+    toast(`${(result && result.deleted != null) ? result.deleted : ids.length} siswa berhasil dihapus.`, 'success');
+  }catch(err){
+    toast('Gagal menghapus siswa terpilih: ' + err.message, 'error');
+  }finally{
+    showLoading(false);
+  }
+});
 $('#filterKelasSiswa').addEventListener('change', () => renderSiswa());
 
 /* ---------------- ABSENSI ---------------- */
@@ -3083,11 +3198,31 @@ function buildHomeVisitReportHtml(rows){
    manual lewat tombol "Tambah Siswa" tetap berfungsi seperti biasa. */
 const SISWA_TEMPLATE_COLUMNS = ['NIS','Nama','Kelas','JenisKelamin','TempatTglLahir','NamaOrtu','NoHPOrtu','Alamat','Catatan','Barcode'];
 
+/* Nomor HP Indonesia selalu berawalan 0 (atau 62). Kalau Excel sudah telanjur
+   membuang nol-nya (mis. "81234567890"), kembalikan nolnya. Spasi/strip dibuang. */
+function normalizeNoHP(v){
+  let s = String(v || '').trim().replace(/[\s\-().]/g, '');
+  if (!s) return '';
+  if (/^\d+$/.test(s) && s.charAt(0) === '8' && s.length >= 9 && s.length <= 12) s = '0' + s;
+  return s;
+}
+
 function downloadSiswaTemplate(){
   const contoh = { NIS:'2201099', Nama:'Contoh Nama Siswa', Kelas:'VII-A', JenisKelamin:'L',
     TempatTglLahir:'Kota, 01-01-2012', NamaOrtu:'Nama Orang Tua', NoHPOrtu:'0812xxxxxxx',
     Alamat:'Alamat lengkap', Catatan:'', Barcode:'BK-2201099 (opsional, isi kalau kartu sudah dicetak)' };
   const ws = XLSX.utils.json_to_sheet([contoh], { header: SISWA_TEMPLATE_COLUMNS });
+  // Format kolom NIS & NoHPOrtu = TEKS (sampai baris 1000) supaya Excel tidak membuang nol di depan
+  // saat guru mengetik/menempel data di template ini.
+  ['NIS','NoHPOrtu'].forEach(col => {
+    const c = SISWA_TEMPLATE_COLUMNS.indexOf(col);
+    for (let r = 1; r <= 1000; r++){
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[addr] || (ws[addr] = { t:'s', v:'' });
+      cell.t = 's'; cell.z = '@'; cell.v = String(cell.v == null ? '' : cell.v);
+    }
+  });
+  ws['!ref'] = XLSX.utils.encode_range({ s:{ r:0, c:0 }, e:{ r:1000, c:SISWA_TEMPLATE_COLUMNS.length - 1 } });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Siswa');
   XLSX.writeFile(wb, 'Template_Import_Siswa_BKDigital.xlsx');
@@ -3101,13 +3236,16 @@ $('#importSiswaFile').addEventListener('change', async (e) => {
   showLoading(true);
   try{
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type:'array' });
+    // cellText:true + raw:false -> yang dibaca adalah TEKS persis seperti tampil di Excel,
+    // bukan angka mentah. Ini yang menjaga nol di depan (mis. NIS "0012345678").
+    const wb = XLSX.read(buf, { type:'array', cellText:true, cellDates:false });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { defval:'' });
+    const rows = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
     const cleaned = rows
       .map(r => {
         const o = {};
         SISWA_TEMPLATE_COLUMNS.forEach(c => { o[c] = (r[c] !== undefined ? String(r[c]).trim() : ''); });
+        o.NoHPOrtu = normalizeNoHP(o.NoHPOrtu);
         return o;
       })
       .filter(r => r.NIS && r.Nama); // baris tanpa NIS/Nama diabaikan

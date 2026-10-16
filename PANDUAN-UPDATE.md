@@ -4,6 +4,25 @@ Ringkasan perubahan dan cara memasangnya. Kode frontend (GitHub) dan data (Googl
 tetap terpisah seperti sebelumnya — **update kode ini tidak pernah menyentuh data yang
 sudah tersimpan di Sheet kamu.**
 
+## -5. PENTING (update terbaru) — Perbaikan Data Siswa
+
+1. **Nol di depan NIS / No. HP tidak hilang lagi saat Import Excel.** Frontend kini membaca
+   sel Excel sebagai teks, template Excel memformat kolom NIS & NoHPOrtu sebagai Teks, dan
+   backend memaksa kolom itu berformat teks di Google Sheet (`TEXT_COLUMNS`). Nomor HP yang
+   nolnya sudah telanjur hilang (mis. `81234...`) otomatis dikembalikan jadi `081234...`.
+2. **Jumlah siswa tampil di paling bawah tabel** (total, jumlah L/P, dan "Menampilkan X dari Y"
+   saat difilter kelas / dicari).
+3. **Hapus massal Data Siswa** (khusus Admin): centang siswa (atau centang "pilih semua"),
+   lalu klik **Hapus Terpilih**. Butuh patch backend `deleteBulk`.
+4. **Data Siswa tampil urut abjad** (A-Z berdasarkan Nama).
+
+**Cara pasang:** ganti `index.html`, `script.js`, `style.css`, `sw.js` di GitHub, lalu
+tempel patch backend dari `BACKEND-PATCH-Code.gs.txt` ke `Code.gs` dan deploy **New version**.
+Tanpa patch backend, hapus massal akan gagal & nol di depan di Sheet belum terjaga.
+
+> Data lama yang nol-nya sudah hilang di Sheet tidak bisa dipulihkan otomatis. Cara cepat:
+> hapus siswa itu dengan Hapus Massal, lalu import ulang file Excel-nya.
+
 ## -4. PENTING (update terbaru) — Rekap Absensi format lembar sekolah
 
 Laporan **Rekap Absensi** sekarang punya pilihan baru **"Bentuk Rekap Absensi"** di

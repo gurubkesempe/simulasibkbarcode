@@ -195,6 +195,7 @@
             <button class="btn btn-ghost" id="btnImportSiswa" title="Upload data siswa dari file Excel"><i class="fa-solid fa-file-arrow-up"></i> Import Excel</button>
             <input type="file" id="importSiswaFile" accept=".xlsx,.xls" class="hidden" />
             <button class="btn btn-ghost" id="btnBulkPrintBarcode" title="Cetak kartu QR banyak siswa sekaligus, ukuran kartu pelajar"><i class="fa-solid fa-id-card"></i> Cetak Kartu QR (Massal)</button>
+            <button class="btn btn-danger hidden" id="btnBulkDeleteSiswa" title="Hapus semua siswa yang dicentang"><i class="fa-solid fa-trash"></i> Hapus Terpilih (<span id="bulkDeleteSiswaCount">0</span>)</button>
             <button class="btn btn-primary" id="btnAddSiswa"><i class="fa-solid fa-plus"></i> Tambah Siswa</button>
           </div>
         </div>
@@ -202,11 +203,12 @@
         <div class="card table-card">
           <div class="table-wrap">
             <table class="table" id="tableSiswa">
-              <thead><tr><th>NIS</th><th>Nama</th><th>Kelas</th><th>L/P</th><th>Orang Tua</th><th>No. HP Ortu</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th class="col-check" id="siswaCheckAllTh"><input type="checkbox" id="siswaCheckAll" title="Pilih semua siswa yang tampil" aria-label="Pilih semua" /></th><th>NIS</th><th>Nama</th><th>Kelas</th><th>L/P</th><th>Orang Tua</th><th>No. HP Ortu</th><th>Status</th><th></th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
           <div class="empty-state" style="display:none"><i class="fa-solid fa-user-graduate"></i><p>Belum ada data siswa. Klik "Tambah Siswa" untuk mulai.</p></div>
+          <div class="table-footer" id="siswaCountFooter"></div>
         </div>
       </section>
 

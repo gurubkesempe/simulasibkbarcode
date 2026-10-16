@@ -634,3 +634,10 @@ table.absensi-grid tbody td.ag-hadir{ font-weight:700; }
 }
 
 .kiosk-photo{ border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; }
+
+/* ---- Data Siswa: jumlah di bawah tabel & hapus massal ---- */
+.table-footer{ padding:12px 16px; border-top:1px solid var(--border); font-size:13px; color:var(--text-muted, #6b7280); }
+.table-footer b{ color:var(--text, inherit); }
+.table .col-check{ width:36px; text-align:center; padding-left:12px; padding-right:4px; }
+.table .col-check input{ width:16px; height:16px; cursor:pointer; }
+.table tr.row-selected{ background:rgba(59,125,216,.08); }

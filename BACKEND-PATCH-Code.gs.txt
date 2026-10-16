@@ -1,0 +1,136 @@
+/* ============================================================
+   PATCH BACKEND (Code.gs) — 3 langkah, semua di Google Apps Script
+   Data di Sheet TIDAK tersentuh. Setelah edit: Deploy > Manage deployments >
+   pensil > Version: New version > Deploy (URL tetap sama).
+   ============================================================ */
+
+
+/* ---------- LANGKAH 1 ----------
+   Tempel BARIS-BARIS INI tepat di bawah `var ID_PREFIX = {...};`  */
+
+/* Kolom yang HARUS disimpan sebagai TEKS supaya nol di depan tidak hilang
+   (Google Sheets otomatis mengubah "0012345" jadi angka 12345 kalau tidak dipaksa teks). */
+var TEXT_COLUMNS = ['NIS', 'NISN', 'NoHPOrtu'];
+
+function setTextColumnsFormat(sheet, headers, startRow, numRows){
+  if (!numRows) return;
+  headers.forEach(function(h, i){
+    if (TEXT_COLUMNS.indexOf(h) !== -1){
+      sheet.getRange(startRow, i + 1, numRows, 1).setNumberFormat('@');
+    }
+  });
+}
+
+
+/* ---------- LANGKAH 2 ----------
+   GANTI 3 fungsi lama (createRow, updateRow, importBulk) dengan versi ini,
+   dan TAMBAHKAN deleteSiswaBulk di bawahnya. */
+
+function createRow(type, data){
+  var sheet = getSheet(type);
+  var headers = getHeaders(sheet);
+  if (!data.ID){
+    data.ID = (ID_PREFIX[type] || 'ID') + '-' + Date.now().toString(36).toUpperCase();
+  }
+  var rowValues = headers.map(function(h){ return (data[h] !== undefined && data[h] !== null) ? data[h] : ''; });
+  var newRow = sheet.getLastRow() + 1;
+  setTextColumnsFormat(sheet, headers, newRow, 1);            // <-- BARU: NIS/NoHP jadi teks
+  sheet.getRange(newRow, 1, 1, headers.length).setValues([rowValues]); // (pengganti appendRow)
+  return data;
+}
+
+function updateRow(type, id, data){
+  var sheet = getSheet(type);
+  var headers = getHeaders(sheet);
+  var rowIdx = findRowIndexById(sheet, headers, id);
+  if (rowIdx === -1) throw new Error('Data dengan ID ' + id + ' tidak ditemukan.');
+  Object.keys(data).forEach(function(key){
+    var col = headers.indexOf(key);
+    if (col === -1) return;
+    var cell = sheet.getRange(rowIdx, col+1);
+    if (TEXT_COLUMNS.indexOf(key) !== -1) cell.setNumberFormat('@'); // <-- BARU
+    cell.setValue(data[key]);
+  });
+  var current = {};
+  var rowValues = sheet.getRange(rowIdx,1,1,headers.length).getValues()[0];
+  headers.forEach(function(h,i){ current[h] = rowValues[i]; });
+  return current;
+}
+
+function importBulk(type, rows, matchField){
+  var sheet = getSheet(type);
+  var headers = getHeaders(sheet);
+  var matchCol = headers.indexOf(matchField);
+  var existingKeys = {};
+  if (matchCol !== -1){
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2){
+      var vals = sheet.getRange(2, matchCol+1, lastRow-1, 1).getValues();
+      vals.forEach(function(v){
+        var k = String(v[0]).trim().toLowerCase();
+        if (k) existingKeys[k] = true;
+      });
+    }
+  }
+  var added = 0, skipped = 0, skippedRows = [];
+  var matrix = [];
+  rows.forEach(function(r){
+    var keyVal = matchCol !== -1 ? String(r[matchField] || '').trim().toLowerCase() : '';
+    if (matchCol !== -1 && keyVal && existingKeys[keyVal]){
+      skipped++; skippedRows.push(r[matchField]);
+      return;
+    }
+    if (!r.ID){ r.ID = (ID_PREFIX[type] || 'ID') + '-' + Date.now().toString(36).toUpperCase() + '-' + added; }
+    matrix.push(headers.map(function(h){ return (r[h] !== undefined && r[h] !== null) ? r[h] : ''; }));
+    if (matchCol !== -1 && keyVal) existingKeys[keyVal] = true;
+    added++;
+  });
+  if (matrix.length){
+    var startRow = sheet.getLastRow() + 1;
+    setTextColumnsFormat(sheet, headers, startRow, matrix.length); // <-- BARU: WAJIB sebelum setValues
+    sheet.getRange(startRow, 1, matrix.length, headers.length).setValues(matrix);
+  }
+  return { added: added, skipped: skipped, skippedKeys: skippedRows };
+}
+
+/* BARU — Hapus massal Data Siswa dalam SATU permintaan. Baris yang berurutan
+   digabung supaya cepat (deleteRows), dihapus dari bawah ke atas supaya nomor
+   baris yang belum diproses tidak bergeser. Riwayat Absensi/Pelanggaran/
+   Konseling/Kolaborasi TIDAK ikut terhapus. */
+function deleteSiswaBulk(ids){
+  if (!ids || !ids.length) throw new Error('Pilih minimal satu siswa untuk dihapus.');
+  var sheet = getSheet('siswa');
+  var headers = getHeaders(sheet);
+  var idCol = headers.indexOf('ID');
+  if (idCol === -1) throw new Error('Kolom ID tidak ditemukan di sheet Siswa.');
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { deleted: 0 };
+  var idSet = {};
+  ids.forEach(function(id){ idSet[String(id)] = true; });
+  var values = sheet.getRange(2, idCol + 1, lastRow - 1, 1).getValues();
+  var rowNums = [];
+  for (var i = 0; i < values.length; i++){
+    if (idSet[String(values[i][0])]) rowNums.push(i + 2);
+  }
+  var deleted = 0, k = rowNums.length - 1;
+  while (k >= 0){
+    var start = rowNums[k], count = 1;
+    while (k - 1 >= 0 && rowNums[k - 1] === start - 1){ start--; count++; k--; }
+    sheet.deleteRows(start, count);
+    deleted += count;
+    k--;
+  }
+  return { deleted: deleted };
+}
+
+
+/* ---------- LANGKAH 3 ----------
+   Di doPost(), tempel blok ini tepat SEBELUM baris:
+       return jsonOut({ ok:false, error:'Aksi POST tidak dikenal.' });        */
+
+    if (action === 'deleteBulk'){
+      assertIsAdmin(auth, 'menghapus data massal');
+      if (type !== 'siswa') throw new Error('Hapus massal hanya tersedia untuk Data Siswa.');
+      var delResult = deleteSiswaBulk(body.ids || []);
+      return jsonOut({ ok:true, data: delResult });
+    }
