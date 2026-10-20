@@ -3800,9 +3800,103 @@ $('#guruAccountsBtnMobile').addEventListener('click', () => { closeMoreSheet(); 
 $('#konselorAccountsBtn').addEventListener('click', () => openKonselorAccounts());
 $('#konselorAccountsBtnMobile').addEventListener('click', () => { closeMoreSheet(); openKonselorAccounts(); });
 
+/* ---------------- PEMILIH KELAS TANGGUNG JAWAB (multi-pilih) ----------------
+   Dipakai di Kelola Akun Guru Mapel & Guru BK. Admin tinggal centang kelas
+   (boleh lebih dari satu) tanpa mengetik. Daftar kelas diambil otomatis dari
+   Data Siswa. "Semua Kelas" dicentang = tidak ada pembatasan (kolom Kelas
+   dikosongkan, sama seperti aturan di server). Format simpan tetap sama:
+   "VII-A, VII-B" (dipisah koma), jadi data lama & Code.gs tidak perlu diubah. */
+function kelasPickerHtml(id){
+  return `
+    <div class="kelas-picker" id="${id}">
+      <div class="kp-toolbar">
+        <label class="checkbox-pill kp-all"><input type="checkbox" data-kp-all checked /> Semua Kelas</label>
+        <span class="muted kp-summary"></span>
+      </div>
+      <div class="checkbox-group kp-list"></div>
+      <div class="kp-add">
+        <input type="text" class="kp-add-input" placeholder="Kelas belum ada siswanya? Ketik nama kelas lalu Tambah" />
+        <button type="button" class="btn btn-ghost kp-add-btn"><i class="fa-solid fa-plus"></i> Tambah</button>
+      </div>
+    </div>`;
+}
+function parseKelasString(str){
+  return String(str || '').split(',').map(k => k.trim()).filter(Boolean);
+}
+function kelasPickerInit(id){
+  const root = document.getElementById(id);
+  const allBox = root.querySelector('[data-kp-all]');
+  const listEl = root.querySelector('.kp-list');
+  const summary = root.querySelector('.kp-summary');
+  const addInput = root.querySelector('.kp-add-input');
+  const natural = (a,b) => String(a).localeCompare(String(b), 'id', { numeric:true });
+
+  function boxes(){ return Array.from(listEl.querySelectorAll('input[type=checkbox]')); }
+  function updateSummary(){
+    const n = boxes().filter(b => b.checked).length;
+    summary.textContent = n ? `${n} kelas dipilih` : 'Tidak dibatasi (akses semua kelas)';
+  }
+  function addPill(kelas, checked){
+    const exists = boxes().find(b => b.value.toLowerCase() === kelas.toLowerCase());
+    if (exists){ if (checked) exists.checked = true; return; }
+    const label = document.createElement('label');
+    label.className = 'checkbox-pill';
+    label.innerHTML = `<input type="checkbox" value="${escapeHtml(kelas)}" /> ${escapeHtml(kelas)}`;
+    label.querySelector('input').checked = !!checked;
+    // sisipkan sesuai urutan alfabet-angka
+    const sorted = boxes().find(b => natural(b.value, kelas) > 0);
+    if (sorted) listEl.insertBefore(label, sorted.closest('label')); else listEl.appendChild(label);
+  }
+  function build(){
+    listEl.innerHTML = '';
+    const classes = uniqueClasses().slice().sort(natural);
+    if (!classes.length){
+      listEl.innerHTML = '<span class="muted">Belum ada data siswa, jadi belum ada daftar kelas. Ketik nama kelas di bawah lalu klik Tambah.</span>';
+    }
+    classes.forEach(c => addPill(c, false));
+  }
+  function syncAll(){
+    allBox.checked = boxes().every(b => !b.checked);
+    updateSummary();
+  }
+
+  allBox.addEventListener('change', () => {
+    if (allBox.checked) boxes().forEach(b => b.checked = false);
+    else if (!boxes().some(b => b.checked)) allBox.checked = true; // minimal salah satu mode aktif
+    updateSummary();
+  });
+  listEl.addEventListener('change', syncAll);
+  function addManual(){
+    const v = addInput.value.trim();
+    if (!v) return;
+    if (v.includes(',')){ toast('Tambahkan satu kelas per kali (tanpa koma).', 'error'); return; }
+    if (listEl.querySelector('.muted')) listEl.innerHTML = '';
+    addPill(v, true);
+    addInput.value = '';
+    syncAll();
+  }
+  root.querySelector('.kp-add-btn').addEventListener('click', addManual);
+  addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); addManual(); } });
+
+  build();
+  updateSummary();
+
+  return {
+    get(){ return boxes().filter(b => b.checked).map(b => b.value).join(', '); },
+    set(str){
+      const wanted = parseKelasString(str);
+      boxes().forEach(b => { b.checked = false; });
+      // kelas tersimpan yang belum ada di daftar (mis. belum ada siswanya) tetap ditampilkan
+      wanted.forEach(k => addPill(k, true));
+      syncAll();
+    },
+    reset(){ this.set(''); addInput.value = ''; }
+  };
+}
+
 /* ---------------- KELOLA AKUN GURU MAPEL ----------------
    Admin/Guru BK menambah, mengedit, dan menghapus akun login guru mapel
-   dari sini. Kelas diketik dipisah koma (mis. "VII-A, VII-B") — itulah
+   dari sini. Kelas dipilih lewat centang (boleh lebih dari satu) — itulah
    satu-satunya kelas yang bisa dilihat/dicatat pelanggarannya oleh akun ini,
    ditegakkan di server (lihat Code.gs), bukan cuma disembunyikan di tampilan. */
 function openGuruAccounts(){
@@ -3810,7 +3904,7 @@ function openGuruAccounts(){
   let editingId = null;
 
   $('#modalBody').innerHTML = `
-    <p class="muted" style="margin:0 0 14px">Setiap akun di bawah bisa login (tanpa perlu tahu URL Web App/token) dan hanya melihat &amp; mencatat Pelanggaran untuk kelas yang kamu tulis di sini.</p>
+    <p class="muted" style="margin:0 0 14px">Setiap akun di bawah bisa login (tanpa perlu tahu URL Web App/token) dan hanya melihat &amp; mencatat Pelanggaran untuk kelas yang kamu pilih di sini.</p>
     <form id="guruAccountForm">
       <div class="form-grid">
         <div class="field"><label>Nama Guru</label>
@@ -3829,10 +3923,10 @@ function openGuruAccounts(){
           </select>
         </div>
         <div class="field full"><label>Kelas Tanggung Jawab</label>
-          <input type="text" id="gaKelas" placeholder="Contoh: VII-A, VII-B (pisahkan dengan koma) — kosongkan untuk akses ke SEMUA kelas" />
+          ${kelasPickerHtml('gaKelasPicker')}
         </div>
       </div>
-      <p class="muted" style="margin:-8px 0 14px">Kosongkan kolom Kelas kalau guru ini boleh mencatat pelanggaran untuk semua kelas, bukan hanya kelas tertentu.</p>
+      <p class="muted" style="margin:-8px 0 14px">Centang satu atau lebih kelas yang menjadi tanggung jawab guru ini. Biarkan &quot;Semua Kelas&quot; kalau guru ini boleh mencatat pelanggaran untuk semua kelas.</p>
       <div class="modal-actions" style="justify-content:flex-start; margin-bottom:18px">
         <button type="submit" class="btn btn-primary" id="gaSubmitBtn"><i class="fa-solid fa-plus"></i> Tambah Akun</button>
         <button type="button" class="btn btn-ghost hidden" id="gaCancelEditBtn">Batal Edit</button>
@@ -3869,7 +3963,7 @@ function openGuruAccounts(){
       </div>`).join('');
   }
   renderList();
-
+  const gaPicker = kelasPickerInit('gaKelasPicker');
   $('#gaList').addEventListener('click', async (e) => {
     const editBtn = e.target.closest('[data-ga-edit]');
     const delBtn = e.target.closest('[data-ga-del]');
@@ -3882,7 +3976,7 @@ function openGuruAccounts(){
       $('#gaPassword').value = '';
       $('#gaPassword').placeholder = 'Kosongkan jika tidak ingin mengubah password';
       $('#gaStatus').value = g.Status || 'Aktif';
-      $('#gaKelas').value = g.Kelas || '';
+      gaPicker.set(g.Kelas || '');
       $('#gaSubmitBtn').innerHTML = '<i class="fa-solid fa-check"></i> Update Akun';
       $('#gaCancelEditBtn').classList.remove('hidden');
       $('#gaNama').focus();
@@ -3904,7 +3998,7 @@ function openGuruAccounts(){
 
   $('#gaCancelEditBtn').addEventListener('click', () => {
     editingId = null;
-    $('#guruAccountForm').reset();
+    $('#guruAccountForm').reset(); gaPicker.reset();
     $('#gaPassword').placeholder = 'Isi/ganti password';
     $('#gaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
     $('#gaCancelEditBtn').classList.add('hidden');
@@ -3916,7 +4010,7 @@ function openGuruAccounts(){
     const username = $('#gaUsername').value.trim();
     const password = $('#gaPassword').value;
     const status = $('#gaStatus').value;
-    const kelas = $('#gaKelas').value.trim();
+    const kelas = gaPicker.get();
     if (!nama || !username){ toast('Nama dan Username wajib diisi.', 'error'); return; }
     if (!editingId && !password){ toast('Password wajib diisi untuk akun baru.', 'error'); return; }
     const btn = $('#gaSubmitBtn');
@@ -3936,7 +4030,7 @@ function openGuruAccounts(){
         toast('Akun guru mapel ditambahkan.', 'success');
       }
       editingId = null;
-      $('#guruAccountForm').reset();
+      $('#guruAccountForm').reset(); gaPicker.reset();
       $('#gaPassword').placeholder = 'Isi/ganti password';
       $('#gaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
       $('#gaCancelEditBtn').classList.add('hidden');
@@ -4015,7 +4109,7 @@ function openKonselorAccounts(){
   let editingId = null;
 
   $('#modalBody').innerHTML = `
-    <p class="muted" style="margin:0 0 14px">Setiap akun di bawah bisa login (tanpa perlu tahu URL Web App/token) dan hanya melihat &amp; mencatat <b>Konseling</b> untuk siswa di kelas yang kamu tulis di sini. Password bisa diisi PIN pendek supaya mudah diingat.</p>
+    <p class="muted" style="margin:0 0 14px">Setiap akun di bawah bisa login (tanpa perlu tahu URL Web App/token) dan hanya melihat &amp; mencatat <b>Konseling</b> untuk siswa di kelas yang kamu pilih di sini. Password bisa diisi PIN pendek supaya mudah diingat.</p>
     <form id="konselorAccountForm">
       <div class="form-grid">
         <div class="field"><label>Nama Guru BK</label>
@@ -4034,10 +4128,10 @@ function openKonselorAccounts(){
           </select>
         </div>
         <div class="field full"><label>Kelas Tanggung Jawab</label>
-          <input type="text" id="kaKelas" placeholder="Contoh: VII-A, VII-B (pisahkan dengan koma) — kosongkan untuk akses ke SEMUA kelas" />
+          ${kelasPickerHtml('kaKelasPicker')}
         </div>
       </div>
-      <p class="muted" style="margin:-8px 0 14px">Kosongkan kolom Kelas kalau Guru BK ini boleh mencatat konseling untuk semua kelas, bukan hanya kelas tertentu.</p>
+      <p class="muted" style="margin:-8px 0 14px">Centang satu atau lebih kelas yang menjadi tanggung jawab Guru BK ini. Biarkan &quot;Semua Kelas&quot; kalau Guru BK ini boleh mencatat konseling untuk semua kelas.</p>
       <div class="modal-actions" style="justify-content:flex-start; margin-bottom:18px">
         <button type="submit" class="btn btn-primary" id="kaSubmitBtn"><i class="fa-solid fa-plus"></i> Tambah Akun</button>
         <button type="button" class="btn btn-ghost hidden" id="kaCancelEditBtn">Batal Edit</button>
@@ -4074,7 +4168,7 @@ function openKonselorAccounts(){
       </div>`).join('');
   }
   renderList();
-
+  const kaPicker = kelasPickerInit('kaKelasPicker');
   $('#kaList').addEventListener('click', async (e) => {
     const editBtn = e.target.closest('[data-ka-edit]');
     const delBtn = e.target.closest('[data-ka-del]');
@@ -4087,7 +4181,7 @@ function openKonselorAccounts(){
       $('#kaPassword').value = '';
       $('#kaPassword').placeholder = 'Kosongkan jika tidak ingin mengubah password/PIN';
       $('#kaStatus').value = k.Status || 'Aktif';
-      $('#kaKelas').value = k.Kelas || '';
+      kaPicker.set(k.Kelas || '');
       $('#kaSubmitBtn').innerHTML = '<i class="fa-solid fa-check"></i> Update Akun';
       $('#kaCancelEditBtn').classList.remove('hidden');
       $('#kaNama').focus();
@@ -4109,7 +4203,7 @@ function openKonselorAccounts(){
 
   $('#kaCancelEditBtn').addEventListener('click', () => {
     editingId = null;
-    $('#konselorAccountForm').reset();
+    $('#konselorAccountForm').reset(); kaPicker.reset();
     $('#kaPassword').placeholder = 'Isi/ganti password atau PIN';
     $('#kaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
     $('#kaCancelEditBtn').classList.add('hidden');
@@ -4121,7 +4215,7 @@ function openKonselorAccounts(){
     const username = $('#kaUsername').value.trim();
     const password = $('#kaPassword').value;
     const status = $('#kaStatus').value;
-    const kelas = $('#kaKelas').value.trim();
+    const kelas = kaPicker.get();
     if (!nama || !username){ toast('Nama dan Username wajib diisi.', 'error'); return; }
     if (!editingId && !password){ toast('Password/PIN wajib diisi untuk akun baru.', 'error'); return; }
     const btn = $('#kaSubmitBtn');
@@ -4141,7 +4235,7 @@ function openKonselorAccounts(){
         toast('Akun Guru BK ditambahkan.', 'success');
       }
       editingId = null;
-      $('#konselorAccountForm').reset();
+      $('#konselorAccountForm').reset(); kaPicker.reset();
       $('#kaPassword').placeholder = 'Isi/ganti password atau PIN';
       $('#kaSubmitBtn').innerHTML = '<i class="fa-solid fa-plus"></i> Tambah Akun';
       $('#kaCancelEditBtn').classList.add('hidden');
