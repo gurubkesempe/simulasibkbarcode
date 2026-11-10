@@ -585,7 +585,7 @@ function renderKenaikanSiswaList(prefix, kelas){
   list.innerHTML = siswaKelas.map(s => `
     <label class="checkbox-pill bulk-item">
       <input type="checkbox" class="${prefix}-siswa-check" value="${escapeHtml(s.ID)}" checked />
-      <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+      ${avatarHtmlFor(s, 24)}
       <span>${escapeHtml(s.Nama)} <span class="muted">· NIS ${escapeHtml(s.NIS||'-')}</span></span>
     </label>`).join('');
   if (checkAll) checkAll.checked = true;
@@ -750,7 +750,7 @@ function renderSearchDropdown(q){
     dd.innerHTML = matchSiswa.map(s => {
       const c = countsFor(s.ID);
       return `<div class="search-dd-item">
-        <span class="avatar-ring" style="width:28px;height:28px;font-size:10.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+        ${avatarHtmlFor(s, 28)}
         <span class="search-dd-info">
           <span class="search-dd-name">${escapeHtml(s.Nama)}</span>
           <span class="search-dd-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')} ${c.pelanggaran?`· ${c.pelanggaran} pelanggaran`:''} ${c.absensiAlpa?`· ${c.absensiAlpa}x alpa`:''}</span>
@@ -789,25 +789,82 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- DROPDOWN JENIS PELANGGARAN (dari Template Pelanggaran) ---------------- */
-document.addEventListener('change', e => {
-  if (!e.target.classList.contains('jenis-pelanggaran-select')) return;
-  const wrap = e.target.closest('.jenis-pelanggaran-picker');
-  const hidden = wrap.querySelector('input[type=hidden]');
-  const customInput = wrap.querySelector('.jenis-pelanggaran-custom');
-  const form = wrap.closest('form');
+function closeJenisPanels(except){
+  document.querySelectorAll('.jenis-pelanggaran-picker').forEach(p => {
+    if (p === except) return;
+    const panel = p.querySelector('.jp-panel');
+    if (panel && !panel.classList.contains('hidden')){
+      panel.classList.add('hidden');
+      p.querySelector('.jp-trigger').setAttribute('aria-expanded', 'false');
+      p.classList.remove('open');
+    }
+  });
+}
+document.addEventListener('click', e => {
+  const picker = e.target.closest('.jenis-pelanggaran-picker');
+  if (!picker){ closeJenisPanels(null); return; }
+  closeJenisPanels(picker);
+  const panel = picker.querySelector('.jp-panel');
+  const trigger = picker.querySelector('.jp-trigger');
+
+  if (e.target.closest('.jp-trigger')){
+    const willOpen = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !willOpen);
+    picker.classList.toggle('open', willOpen);
+    trigger.setAttribute('aria-expanded', String(willOpen));
+    if (willOpen){
+      const search = panel.querySelector('.jp-search');
+      search.value = '';
+      panel.querySelectorAll('.jp-opt').forEach(o => o.classList.remove('hidden'));
+      panel.querySelector('.jp-empty').classList.add('hidden');
+      search.focus();
+      const sel = panel.querySelector('.jp-opt.selected');
+      if (sel) sel.scrollIntoView({ block: 'nearest' });
+    }
+    return;
+  }
+
+  const opt = e.target.closest('.jp-opt');
+  if (!opt) return;
+  const hidden = picker.querySelector('input[type=hidden]');
+  const customInput = picker.querySelector('.jenis-pelanggaran-custom');
+  const label = picker.querySelector('.jp-label');
+  const form = picker.closest('form');
   const poinInput = form ? form.querySelector('[name="Poin"]') : null;
-  if (e.target.value === '__custom__'){
+  panel.querySelectorAll('.jp-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  label.classList.remove('placeholder');
+  if (opt.dataset.value === '__custom__'){
+    label.textContent = '+ Jenis lainnya (ketik manual)';
     customInput.classList.remove('hidden');
     customInput.value = '';
     hidden.value = '';
     customInput.focus();
   } else {
+    label.innerHTML = opt.querySelector('.jp-opt-text').innerHTML + ' <b>(' + opt.querySelector('.jp-opt-poin').textContent + ')</b>';
     customInput.classList.add('hidden');
-    hidden.value = e.target.value;
-    const opt = e.target.selectedOptions[0];
-    const poin = opt ? opt.dataset.poin : '';
+    hidden.value = opt.dataset.value;
+    const poin = opt.dataset.poin;
     if (poinInput && poin !== undefined && poin !== '') poinInput.value = poin;
   }
+  panel.classList.add('hidden');
+  picker.classList.remove('open');
+  trigger.setAttribute('aria-expanded', 'false');
+});
+document.addEventListener('input', e => {
+  if (!e.target.classList.contains('jp-search')) return;
+  const panel = e.target.closest('.jp-panel');
+  const q = e.target.value.trim().toLowerCase();
+  let shown = 0;
+  panel.querySelectorAll('.jp-opt').forEach(o => {
+    const match = !q || o.textContent.toLowerCase().includes(q) || o.dataset.value === '__custom__';
+    o.classList.toggle('hidden', !match);
+    if (match && o.dataset.value !== '__custom__') shown++;
+  });
+  panel.querySelector('.jp-empty').classList.toggle('hidden', shown > 0);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeJenisPanels(null);
 });
 document.addEventListener('input', e => {
   if (!e.target.classList.contains('jenis-pelanggaran-custom')) return;
@@ -971,7 +1028,7 @@ function siswaPickerRenderDropdown(wrap, query){
   const matches = siswaPickerFilter(wrap, query);
   dd.innerHTML = matches.length ? matches.map(s => `
       <button type="button" class="search-dd-item" data-pick-siswa="${escapeHtml(s.ID)}">
-        <span class="avatar-ring" style="width:26px;height:26px;font-size:10px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+        ${avatarHtmlFor(s, 26)}
         <span class="search-dd-info"><span class="search-dd-name">${escapeHtml(s.Nama)}</span><span class="search-dd-sub">${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</span></span>
       </button>`).join('')
     : '<div class="search-dd-empty">Siswa tidak ditemukan untuk filter ini.</div>';
@@ -1150,7 +1207,7 @@ function renderSiswa(){
       ${canBulk ? `<td class="col-check"><input type="checkbox" class="siswa-check" data-id="${escapeHtml(s.ID)}" ${checked ? 'checked' : ''} aria-label="Pilih ${escapeHtml(s.Nama||'siswa')}" /></td>` : ''}
       <td>${escapeHtml(s.NIS||'-')}</td>
       <td><div style="display:flex;align-items:center;gap:10px">
-            <span class="avatar-ring" style="width:30px;height:30px;font-size:11px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+            ${avatarHtmlFor(s, 34)}
             ${escapeHtml(s.Nama||'-')}
           </div></td>
       <td>${escapeHtml(s.Kelas||'-')}</td>
@@ -1159,6 +1216,7 @@ function renderSiswa(){
       <td>${escapeHtml(s.NoHPOrtu||'-')}</td>
       <td><span class="badge badge--${status.cls}"><span class="badge-dot" style="background:currentColor"></span>${status.txt}</span></td>
       <td><div class="row-actions">
+            ${canBulk ? `<button class="icon-btn-sm" data-printcard="1" data-id="${escapeHtml(s.ID)}" title="Cetak kartu QR siswa ini"><i class="fa-solid fa-id-card"></i></button>` : ''}
             <button class="icon-btn-sm" data-edit="siswa" data-id="${escapeHtml(s.ID)}"><i class="fa-solid fa-pen"></i></button>
             <button class="icon-btn-sm danger" data-del="siswa" data-id="${escapeHtml(s.ID)}"><i class="fa-solid fa-trash"></i></button>
           </div></td>
@@ -1459,6 +1517,7 @@ const FORM_CONFIG = {
       { key:'NoHPOrtu', label:'No. HP Orang Tua', type:'text' },
       { key:'Alamat', label:'Alamat', type:'textarea', full:true },
       { key:'Catatan', label:'Catatan Khusus', type:'textarea', full:true },
+      { key:'Foto', label:'Foto Siswa', type:'photo', full:true },
       { key:'Barcode', label:'Kode QR (untuk kartu absensi)', type:'barcode', full:true }
     ]
   },
@@ -1527,11 +1586,18 @@ function openForm(type, id, prefill){
       const isCustom = !!val && !matched;
       return `<div class="${wrapClass}"><label>${f.label}</label>
         <div class="jenis-pelanggaran-picker">
-          <select class="jenis-pelanggaran-select" ${master.length ? '' : 'disabled'}>
-            <option value="">${master.length ? 'Pilih jenis pelanggaran...' : 'Belum ada Template Pelanggaran'}</option>
-            ${master.map(m => `<option value="${escapeHtml(m.JenisPelanggaran)}" data-poin="${escapeHtml(String(m.Poin ?? ''))}" ${m.JenisPelanggaran===val?'selected':''}>${escapeHtml(m.JenisPelanggaran)} (${escapeHtml(String(m.Poin ?? 0))} poin)</option>`).join('')}
-            <option value="__custom__" ${isCustom?'selected':''}>+ Jenis lainnya (ketik manual)</option>
-          </select>
+          <button type="button" class="jp-trigger${master.length ? '' : ' disabled'}" ${master.length ? '' : 'disabled'} aria-haspopup="listbox" aria-expanded="false">
+            <span class="jp-label${(matched || isCustom) ? '' : ' placeholder'}">${matched ? `${escapeHtml(matched.JenisPelanggaran)} <b>(${escapeHtml(String(matched.Poin ?? 0))} poin)</b>` : (isCustom ? '+ Jenis lainnya (ketik manual)' : (master.length ? 'Pilih jenis pelanggaran...' : 'Belum ada Template Pelanggaran'))}</span>
+            <i class="fa-solid fa-chevron-down jp-chevron"></i>
+          </button>
+          <div class="jp-panel hidden">
+            <input type="text" class="jp-search" placeholder="Cari jenis pelanggaran..." autocomplete="off" />
+            <ul class="jp-list" role="listbox">
+              ${master.map(m => `<li class="jp-opt${m.JenisPelanggaran===val?' selected':''}" role="option" data-value="${escapeHtml(m.JenisPelanggaran)}" data-poin="${escapeHtml(String(m.Poin ?? ''))}"><span class="jp-opt-text">${escapeHtml(m.JenisPelanggaran)}</span><b class="jp-opt-poin">${escapeHtml(String(m.Poin ?? 0))} poin</b></li>`).join('')}
+              <li class="jp-opt jp-opt-custom${isCustom?' selected':''}" role="option" data-value="__custom__"><span class="jp-opt-text">+ Jenis lainnya (ketik manual)</span></li>
+            </ul>
+            <div class="jp-empty hidden">Tidak ada yang cocok.</div>
+          </div>
           <input type="text" class="jenis-pelanggaran-custom${isCustom?'':' hidden'}" placeholder="Ketik jenis pelanggaran lainnya..." value="${isCustom?escapeHtml(val):''}" />
           <input type="hidden" name="${f.key}" value="${escapeHtml(val||'')}" />
         </div>
@@ -1574,6 +1640,23 @@ function openForm(type, id, prefill){
         </div>
         <input type="hidden" name="${f.key}" class="signature-hidden" value="${escapeHtml(val||'')}" />
         <p class="muted" style="margin-top:6px;font-size:11.5px">Minta siswa tanda tangan atau paraf di kotak ini setelah sesi konseling selesai. TTD ini akan ikut tampil di Laporan, di sebelah Rencana Tindak Lanjut.</p>
+      </div>`;
+    }
+    if (f.type === 'photo'){
+      return `<div class="${wrapClass} field-photo">
+        <label>${f.label}</label>
+        <div class="photo-row">
+          <div class="photo-preview" data-initials="${escapeHtml(initials(existing ? existing.Nama : ''))}">${val ? `<img src="${escapeHtml(val)}" alt="Foto siswa" />` : '<i class="fa-solid fa-user"></i>'}</div>
+          <div class="photo-actions">
+            <button type="button" class="btn btn-ghost btn-sm photo-pick-btn"><i class="fa-solid fa-image"></i> Pilih Foto</button>
+            <button type="button" class="btn btn-ghost btn-sm photo-cam-btn"><i class="fa-solid fa-camera"></i> Ambil dari Kamera</button>
+            <button type="button" class="btn btn-ghost btn-sm photo-remove-btn${val ? '' : ' hidden'}"><i class="fa-solid fa-trash"></i> Hapus Foto</button>
+            <input type="file" accept="image/*" class="photo-file-input hidden" />
+            <input type="file" accept="image/*" capture="user" class="photo-cam-input hidden" />
+          </div>
+        </div>
+        <input type="hidden" name="${f.key}" class="photo-value" value="${escapeHtml(val||'')}" />
+        <p class="muted photo-hint">Foto otomatis dipotong rasio 3:4 &amp; dikecilkan (±10 KB) supaya muat di Google Sheet. Dipakai di daftar siswa, Mode Kamera, dan kartu pelajar QR. Gunakan foto close-up wajah, latar polos.</p>
       </div>`;
     }
     if (f.type === 'barcode'){
@@ -1683,8 +1766,75 @@ function closeModal(){ $('#modalBackdrop').classList.remove('open'); }
 function avatarHtmlFor(s, size){
   size = size || 30;
   const nama = s ? s.Nama : '';
+  const foto = s && s.Foto ? String(s.Foto) : '';
+  if (foto.indexOf('data:image/') === 0){
+    return `<span class="avatar-ring avatar-photo" style="width:${size}px;height:${size}px;"><img src="${escapeHtml(foto)}" alt="" loading="lazy" /></span>`;
+  }
   return `<span class="avatar-ring" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.36)}px;background:${colorFromString(nama)}">${escapeHtml(initials(nama))}</span>`;
 }
+
+/* ---------------- FOTO SISWA (upload, potong 3:4, kompres) ----------------
+   Disimpan sebagai data URL JPEG di kolom "Foto" sheet Siswa. Sel Google Sheets
+   dibatasi ±50.000 karakter, jadi foto dipotong rasio 3:4 (ukuran kartu pelajar),
+   dikecilkan, dan kualitasnya diturunkan bertahap sampai <= PHOTO_MAX_CHARS. */
+const PHOTO_W = 168, PHOTO_H = 224, PHOTO_MAX_CHARS = 16000;
+function processStudentPhoto(file){
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)){ reject(new Error('File harus berupa gambar (JPG/PNG).')); return; }
+    if (file.size > 15 * 1024 * 1024){ reject(new Error('Ukuran foto terlalu besar (maks 15 MB).')); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try{
+        const sw = img.naturalWidth, sh = img.naturalHeight;
+        // Area potong 3:4 terbesar di tengah; kalau foto landscape/portrait tinggi,
+        // bagian vertikalnya digeser ke atas supaya wajah tidak terpotong.
+        let cw = sw, ch = Math.round(sw * PHOTO_H / PHOTO_W);
+        if (ch > sh){ ch = sh; cw = Math.round(sh * PHOTO_W / PHOTO_H); }
+        const sx = Math.round((sw - cw) / 2);
+        const sy = Math.round((sh - ch) * 0.25);
+        const canvas = document.createElement('canvas');
+        canvas.width = PHOTO_W; canvas.height = PHOTO_H;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, PHOTO_W, PHOTO_H);
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, sx, sy, cw, ch, 0, 0, PHOTO_W, PHOTO_H);
+        let q = 0.82, out = canvas.toDataURL('image/jpeg', q);
+        while (out.length > PHOTO_MAX_CHARS && q > 0.35){ q -= 0.07; out = canvas.toDataURL('image/jpeg', q); }
+        URL.revokeObjectURL(url);
+        resolve(out);
+      }catch(e){ URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Gambar tidak bisa dibaca. Coba file JPG/PNG lain.')); };
+    img.src = url;
+  });
+}
+function setPhotoField(wrap, dataUrl){
+  const val = wrap.querySelector('.photo-value');
+  const prev = wrap.querySelector('.photo-preview');
+  val.value = dataUrl || '';
+  prev.innerHTML = dataUrl ? `<img src="${dataUrl}" alt="Foto siswa" />` : '<i class="fa-solid fa-user"></i>';
+  wrap.querySelector('.photo-remove-btn').classList.toggle('hidden', !dataUrl);
+}
+document.addEventListener('click', e => {
+  const wrap = e.target.closest('.field-photo');
+  if (!wrap) return;
+  if (e.target.closest('.photo-pick-btn')) wrap.querySelector('.photo-file-input').click();
+  else if (e.target.closest('.photo-cam-btn')) wrap.querySelector('.photo-cam-input').click();
+  else if (e.target.closest('.photo-remove-btn')) setPhotoField(wrap, '');
+});
+document.addEventListener('change', async e => {
+  const t = e.target;
+  if (!t.classList || !(t.classList.contains('photo-file-input') || t.classList.contains('photo-cam-input'))) return;
+  const wrap = t.closest('.field-photo');
+  const file = t.files && t.files[0];
+  t.value = '';
+  if (!file) return;
+  try{
+    setPhotoField(wrap, await processStudentPhoto(file));
+    toast('Foto siap. Klik Simpan untuk menyimpan.', 'success');
+  }catch(err){ toast(err.message, 'error'); }
+});
 
 /* ---------------- KODE QR SISWA (generate + preview + cetak kartu) ----------------
    Sebelumnya pakai barcode batang (CODE128) tapi seringkali sulit terbaca kamera HP/webcam
@@ -1733,43 +1883,44 @@ document.addEventListener('click', e => {
     const namaInput = document.querySelector('#entityForm input[name="Nama"]');
     const kelasInput = document.querySelector('#entityForm input[name="Kelas"]');
     const nisInput = document.querySelector('#entityForm input[name="NIS"]');
-    printBarcodeCard(code, namaInput ? namaInput.value : '', kelasInput ? kelasInput.value : '', nisInput ? nisInput.value : '');
+    const fotoInput = document.querySelector('#entityForm input[name="Foto"]');
+    printBarcodeCard(code, namaInput ? namaInput.value : '', kelasInput ? kelasInput.value : '', nisInput ? nisInput.value : '', fotoInput ? fotoInput.value : '');
     return;
   }
 });
 
-function printBarcodeCard(code, nama, kelas, nis){
-  const w = window.open('', '_blank', 'width=440,height=440');
-  if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
-  const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  // QR digenerate DI HALAMAN INI (library-nya sudah pasti termuat, sama seperti preview di form),
-  // lalu hasilnya (data URL gambar) ditempel langsung ke jendela cetak. Jendela cetak jadi tidak
-  // perlu memuat library apa pun lagi — anti gagal walau internet lambat/diblokir firewall sekolah.
-  const qrDataUrl = makeQrDataUrl(code, 8, 4);
-  w.document.write(`<!DOCTYPE html><html><head><title>Kartu QR Siswa</title>
-    <style>
-      body{ font-family:Arial, sans-serif; text-align:center; padding:28px; }
-      .card{ border:2px solid #2F6F63; border-radius:12px; padding:18px 22px; display:inline-block; min-width:220px; }
-      h3{ margin:0 0 2px; font-size:18px; }
-      p{ margin:0 0 12px; color:#555; font-size:13px; }
-      img{ display:block; margin:0 auto; width:200px; height:200px; }
-      .code-text{ margin-top:8px; font-size:12px; color:#555; letter-spacing:.5px; }
-      .qr-fail{ color:#c0392b; font-size:12px; }
-    </style></head><body>
-    <div class="card">
-      <h3>${safe(nama) || '-'}</h3>
-      <p>${safe(kelas) || '-'}${nis ? ' &middot; NIS ' + safe(nis) : ''}</p>
-      ${qrDataUrl ? `<img id="qrImg" src="${qrDataUrl}" />` : `<p class="qr-fail">Gagal membuat QR. Tutup jendela ini &amp; coba lagi.</p>`}
-      <div class="code-text">${safe(code)}</div>
-    </div>
-    <script>
-      window.onload = function(){
-        setTimeout(function(){ window.print(); }, 250);
-      };
-    <\/script>
-    </body></html>`);
-  w.document.close();
+function printBarcodeCard(code, nama, kelas, nis, foto){
+  printBulkBarcodeCards([{ Nama:nama, Kelas:kelas, NIS:nis, Barcode:code, Foto:foto }], SCHOOL_NAME || localStorage.getItem('bk_school_name') || '', SCHOOL_YEAR || localStorage.getItem('bk_school_year') || '');
 }
+
+/* Pastikan siswa punya kode QR; kalau belum, dibuat (BK-<NIS/ID>) dan disimpan. */
+async function ensureSiswaBarcode(s){
+  let code = (s.Barcode || '').toString().trim();
+  if (!code){
+    code = 'BK-' + (s.NIS || s.ID);
+    try{
+      const updated = await adapter.update('siswa', s.ID, { Barcode: code });
+      Object.assign(s, updated || {}, { Barcode: code });
+    }catch(e){ s.Barcode = code; }
+  }
+  return code;
+}
+
+/* Cetak kartu 1 siswa langsung dari baris tabel Data Siswa. */
+async function printCardForSiswa(id){
+  const s = siswaById(id);
+  if (!s){ toast('Data siswa tidak ditemukan.', 'error'); return; }
+  showLoading(true);
+  try{
+    await ensureSiswaBarcode(s);
+    renderCurrentPage();
+  }finally{ showLoading(false); }
+  printBulkBarcodeCards([s], SCHOOL_NAME || localStorage.getItem('bk_school_name') || '', SCHOOL_YEAR || localStorage.getItem('bk_school_year') || '');
+}
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-printcard]');
+  if (btn) printCardForSiswa(btn.dataset.id);
+});
 
 /* ---------------- CETAK KARTU BARCODE MASSAL (ukuran kartu pelajar) ----------------
    Alur: pilih kelas (opsional) & centang siswa yang mau dicetak kartunya →
@@ -1796,7 +1947,7 @@ function openBulkBarcodePrint(){
         <input type="text" id="bcpTahun" value="${esc(savedYear)}" placeholder="Contoh: 2025/2026" />
       </div>
     </div>
-    <p class="muted" style="margin:-6px 0 14px">Siswa yang belum punya kode QR akan dibuatkan otomatis & disimpan, supaya langsung bisa dipindai di Mode Kamera.</p>
+    <p class="muted" style="margin:-6px 0 14px">Siswa yang belum punya kode QR akan dibuatkan otomatis & disimpan, supaya langsung bisa dipindai di Mode Kamera. Foto siswa ikut tercetak di kartu; yang belum punya foto memakai inisial.</p>
     <div class="bulk-list-head">
       <label class="checkbox-pill"><input type="checkbox" id="bcpCheckAll" /> Pilih Semua</label>
       <span class="muted" id="bcpCount"></span>
@@ -1827,7 +1978,7 @@ function openBulkBarcodePrint(){
       <label class="checkbox-pill bulk-item">
         <input type="checkbox" class="bcp-siswa-check" value="${escapeHtml(s.ID)}" checked />
         ${avatarHtmlFor(s, 24)}
-        <span>${escapeHtml(s.Nama||'-')} <span class="muted">· ${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}</span></span>
+        <span>${escapeHtml(s.Nama||'-')} <span class="muted">· ${escapeHtml(s.Kelas||'-')} · NIS ${escapeHtml(s.NIS||'-')}${s.Foto ? '' : ' · tanpa foto'}</span></span>
       </label>`).join('');
     $('#bcpCheckAll').checked = true;
     updateBcpCount();
@@ -1856,14 +2007,7 @@ function openBulkBarcodePrint(){
       for (const id of ids){
         const s = siswaById(id);
         if (!s) continue;
-        let code = (s.Barcode || '').toString().trim();
-        if (!code){
-          code = 'BK-' + (s.NIS || s.ID);
-          try{
-            const updated = await adapter.update('siswa', s.ID, { Barcode: code });
-            Object.assign(s, updated || {}, { Barcode: code });
-          }catch(e){ s.Barcode = code; }
-        }
+        await ensureSiswaBarcode(s);
         students.push(s);
       }
       renderCurrentPage();
@@ -1886,68 +2030,66 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
   if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
   const safe = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
-  // QR digenerate DI HALAMAN INI untuk tiap siswa (library sudah pasti termuat di sini),
-  // hasilnya (data URL gambar) langsung ditempel ke tiap kartu. Jendela cetak jadi tidak
-  // perlu memuat library apa pun lagi — anti gagal walau internet lambat/diblokir firewall sekolah.
+  // QR digenerate DI HALAMAN INI (library sudah pasti termuat), hasilnya (data URL gambar)
+  // ditempel langsung ke kartu — jendela cetak tidak perlu memuat apa pun lagi.
+  // Foto siswa juga data URL, jadi tampil tanpa koneksi internet.
   const cardsHtml = students.map((s) => {
     const code = (s.Barcode || '').toString();
-    const qrDataUrl = makeQrDataUrl(code, 5, 2);
+    const qrDataUrl = makeQrDataUrl(code, 6, 2);
+    const foto = (s.Foto && String(s.Foto).indexOf('data:image/') === 0) ? String(s.Foto) : '';
     return `
     <div class="card">
       <div class="card-head">
         ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
-        <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR</div>
+        <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR${schoolYear ? ' &middot; TA ' + safe(schoolYear) : ''}</div>
       </div>
       <div class="card-body">
-        <div class="card-photo"><span>${safe(initials(s.Nama))}</span></div>
+        <div class="card-photo">${foto ? `<img src="${foto}" alt="" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
         <div class="card-info">
           <div class="card-nama">${safe(s.Nama) || '-'}</div>
-          <div class="card-meta">Kelas ${safe(s.Kelas) || '-'}</div>
-          <div class="card-meta">NIS ${safe(s.NIS) || '-'}</div>
+          <div class="card-meta">Kelas <b>${safe(s.Kelas) || '-'}</b></div>
+          <div class="card-meta">NIS <b>${safe(s.NIS) || '-'}</b></div>
         </div>
-        ${qrDataUrl ? `<img class="card-qr" src="${qrDataUrl}" />` : `<div class="card-qr card-qr--fail">QR gagal</div>`}
+        <div class="card-qrbox">
+          ${qrDataUrl ? `<img class="card-qr" src="${qrDataUrl}" alt="QR" />` : `<div class="card-qr card-qr--fail">QR gagal</div>`}
+          <div class="card-code">${safe(code)}</div>
+        </div>
       </div>
-      ${schoolYear ? `<div class="card-foot">Tahun Ajaran ${safe(schoolYear)}</div>` : ''}
     </div>`;
   }).join('');
 
-  w.document.write(`<!DOCTYPE html><html><head><title>Cetak Kartu QR Siswa</title>
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cetak Kartu QR Siswa</title>
     <style>
       @page{ size:A4; margin:8mm; }
-      *{ box-sizing:border-box; }
-      body{ font-family:Arial, Helvetica, sans-serif; margin:0; padding:0; background:#e9edf1; }
+      *{ box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      body{ font-family:Arial, Helvetica, sans-serif; margin:0; padding:10px; background:#e9edf1; }
       .sheet{ display:flex; flex-wrap:wrap; gap:4mm; }
       .card{
-        width:85.6mm; height:53.98mm; border:1px dashed #9aa5b1; border-radius:3mm; background:#fff;
-        padding:3mm 4mm; display:flex; flex-direction:column; justify-content:space-between;
-        page-break-inside:avoid; break-inside:avoid; overflow:hidden;
+        width:85.6mm; height:53.98mm; border:1px solid #2F6F63; border-radius:3mm; background:#fff;
+        display:flex; flex-direction:column; overflow:hidden; page-break-inside:avoid; break-inside:avoid;
       }
-      .card-head{ text-align:center; border-bottom:1.1px solid #2F6F63; padding-bottom:1.4mm; margin-bottom:1.4mm; }
-      .card-school{ font-size:9.5px; font-weight:700; color:#2F6F63; text-transform:uppercase; line-height:1.15; }
-      .card-title{ font-size:7px; font-weight:600; letter-spacing:.4px; color:#777; margin-top:.5mm; }
-      .card-body{ display:flex; align-items:center; gap:2.5mm; flex:1; min-height:0; }
+      .card-head{ background:#2F6F63; color:#fff; text-align:center; padding:1.6mm 3mm 1.4mm; }
+      .card-school{ font-size:9.5px; font-weight:700; text-transform:uppercase; line-height:1.15; }
+      .card-title{ font-size:6.5px; font-weight:600; letter-spacing:.4px; opacity:.85; margin-top:.4mm; }
+      .card-body{ flex:1; min-height:0; display:flex; align-items:center; gap:2.5mm; padding:2mm 3mm; }
       .card-photo{
-        width:13mm; height:13mm; border-radius:50%; background:#EAF3F1; border:1px solid #2F6F63;
-        overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center;
-        font-size:11px; font-weight:700; color:#2F6F63;
+        width:19mm; height:25.3mm; flex-shrink:0; border:1px solid #2F6F63; border-radius:1.5mm; background:#EAF3F1;
+        overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2F6F63;
       }
-      .card-photo img{ width:100%; height:100%; object-fit:cover; }
+      .card-photo img{ width:100%; height:100%; object-fit:cover; object-position:center top; display:block; }
       .card-info{ min-width:0; flex:1; }
-      .card-nama{ font-size:11px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
-      .card-meta{ font-size:8.5px; color:#555; margin-top:.8mm; }
-      .card-qr{ width:15mm; height:15mm; flex-shrink:0; }
-      .card-qr--fail{ display:flex; align-items:center; justify-content:center; font-size:6px; color:#c0392b; border:1px dashed #c0392b; text-align:center; }
-      .card-foot{ text-align:center; font-size:7px; color:#888; }
-      @media print{
-        body{ background:#fff; }
-        .card{ border:1px dashed #ccc; }
-      }
+      .card-nama{ font-size:10.5px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
+      .card-meta{ font-size:8.5px; color:#555; margin-top:1mm; }
+      .card-meta b{ color:#16211c; }
+      .card-qrbox{ width:20mm; flex-shrink:0; text-align:center; }
+      .card-qr{ width:20mm; height:20mm; display:block; }
+      .card-qr--fail{ display:flex; align-items:center; justify-content:center; font-size:6px; color:#c0392b; border:1px dashed #c0392b; }
+      .card-code{ font-size:6px; color:#777; margin-top:.5mm; word-break:break-all; }
+      @media print{ body{ background:#fff; padding:0; } }
     </style></head><body>
     <div class="sheet">${cardsHtml}</div>
     <script>
-      window.onload = function(){
-        setTimeout(function(){ window.print(); }, 350);
-      };
+      window.onload = function(){ setTimeout(function(){ window.print(); }, 450); };
     <\/script>
     </body></html>`);
   w.document.close();
@@ -2249,7 +2391,7 @@ function openBulkAbsensi(){
     list.innerHTML = siswaKelas.map(s => `
       <label class="checkbox-pill bulk-item">
         <input type="checkbox" class="bulk-siswa-check" value="${escapeHtml(s.ID)}" checked />
-        <span class="avatar-ring" style="width:24px;height:24px;font-size:9.5px;background:${colorFromString(s.Nama)}">${escapeHtml(initials(s.Nama))}</span>
+        ${avatarHtmlFor(s, 24)}
         <span>${escapeHtml(s.Nama)} <span class="muted">· NIS ${escapeHtml(s.NIS||'-')}</span></span>
       </label>`).join('');
     $('#bulkCheckAll').checked = true;

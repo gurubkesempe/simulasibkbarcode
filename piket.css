@@ -117,3 +117,5 @@ button,input,select{ font-family:inherit; font-size:14px; }
   .pk-clock{ font-size:17px; }
   .pk-brand-title{ font-size:14px; }
 }
+
+.pk-card-res .pk-photo{ display:block; width:96px; height:128px; object-fit:cover; object-position:center top; margin:0 auto 12px; border-radius:10px; border:3px solid rgba(255,255,255,.45); }

@@ -652,3 +652,46 @@ table.absensi-grid tbody td.ag-hadir{ font-weight:700; }
 .kp-list .checkbox-pill:has(input:checked){ border-color:var(--primary); background:color-mix(in srgb, var(--primary) 10%, var(--surface)); }
 .kp-add{ display:flex; gap:8px; margin-top:10px; }
 .kp-add-input{ flex:1; min-width:0; }
+
+/* Dropdown kustom: teks panjang otomatis turun ke baris berikutnya (tidak terpotong) */
+.jp-trigger{
+  width:100%; display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
+  padding:10px 12px; background:var(--surface); border:1.5px solid var(--border);
+  border-radius:var(--radius-sm); font:inherit; color:var(--ink); text-align:left; cursor:pointer;
+}
+.jp-trigger:focus-visible, .jenis-pelanggaran-picker.open .jp-trigger{ outline:none; border-color:var(--primary); }
+.jp-trigger.disabled{ opacity:.6; cursor:not-allowed; }
+.jp-label{ flex:1; min-width:0; white-space:normal; overflow-wrap:anywhere; line-height:1.4; }
+.jp-label.placeholder{ color:var(--ink-faint); }
+.jp-label b{ white-space:nowrap; color:var(--primary-dark); }
+.jp-chevron{ flex-shrink:0; margin-top:4px; font-size:11px; color:var(--ink-soft); transition:transform .15s; }
+.jenis-pelanggaran-picker.open .jp-chevron{ transform:rotate(180deg); }
+.jp-panel{
+  border:1.5px solid var(--border); border-radius:var(--radius-sm); background:var(--surface);
+  box-shadow:var(--shadow); overflow:hidden;
+}
+.jp-search{ width:100%; border:0 !important; border-bottom:1px solid var(--border) !important; border-radius:0 !important; padding:10px 12px; font:inherit; outline:none; box-sizing:border-box; }
+.jp-list{ list-style:none; margin:0; padding:4px; max-height:240px; overflow-y:auto; overflow-x:hidden; }
+.jp-opt{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
+  padding:9px 10px; border-radius:6px; font-size:13.5px; line-height:1.4; cursor:pointer;
+}
+.jp-opt:hover{ background:var(--primary-light); }
+.jp-opt.selected{ background:var(--primary-light); font-weight:600; }
+.jp-opt-text{ flex:1; min-width:0; white-space:normal; overflow-wrap:anywhere; }
+.jp-opt-poin{ flex-shrink:0; white-space:nowrap; font-size:12px; color:var(--primary-dark); }
+.jp-opt-custom{ border-top:1px dashed var(--border); margin-top:4px; color:var(--ink-soft); }
+.jp-empty{ padding:10px 12px; font-size:13px; color:var(--ink-faint); }
+
+/* ============ FOTO SISWA ============ */
+.avatar-ring.avatar-photo{ overflow:hidden; background:var(--surface-2); }
+.avatar-ring.avatar-photo img{ width:100%; height:100%; object-fit:cover; object-position:center top; display:block; }
+.kiosk-photo.avatar-photo, .pk-photo{ border:3px solid rgba(255,255,255,.45); }
+.field-photo .photo-row{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+.photo-preview{
+  width:90px; height:120px; border-radius:var(--radius-sm); border:1.5px dashed var(--border); background:var(--surface-2);
+  display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; color:var(--ink-faint); font-size:30px;
+}
+.photo-preview img{ width:100%; height:100%; object-fit:cover; display:block; }
+.photo-actions{ display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+.photo-hint{ margin-top:8px; font-size:11.5px; }

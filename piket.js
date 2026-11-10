@@ -187,7 +187,7 @@ function beep(kind){
 function showCard(cls, icon, bodyHtml){
   $('#result').innerHTML = `<div class="pk-card-res pk-card-res--${cls}"><i class="fa-solid ${icon}"></i>${bodyHtml}</div>`;
 }
-const personHtml = (r) => `<div class="pk-name">${escapeHtml(r.nama)}</div><div class="pk-sub">${escapeHtml(r.kelas || '-')} · NIS ${escapeHtml(r.nis || '-')}</div>`;
+const personHtml = (r) => (r.foto && String(r.foto).indexOf('data:image/') === 0 ? `<img class="pk-photo" src="${escapeHtml(r.foto)}" alt="" />` : '') + `<div class="pk-name">${escapeHtml(r.nama)}</div><div class="pk-sub">${escapeHtml(r.kelas || '-')} · NIS ${escapeHtml(r.nis || '-')}</div>`;
 
 async function handleScan(raw){
   const code = String(raw || '').trim();

@@ -378,3 +378,30 @@ Halaman **terpisah** khusus Absensi QR, dibuka di `https://<situs-kamu>/piket.ht
 - Kamera butuh HTTPS (GitHub Pages sudah) dan izin kamera di browser. Layar tablet dijaga tetap menyala selama halaman dibuka.
 - `piket.js` memuat `API_URL` sendiri — kalau suatu saat URL Web App diganti, ubah juga di `script.js` **dan** `piket.js`.
 - Perbaikan kecil: Mode Kamera di aplikasi utama kini memakai tanggal lokal (sebelumnya UTC, bisa salah hari sebelum jam 07.00 WIB).
+
+---
+
+## Update: Foto Siswa, Upload Foto & Kartu Pelajar QR dengan Foto
+
+Penggabungan `simulasibk` → `simulasibkbarcode` + fitur foto.
+
+**Penggabungan**
+- `simulasibkbarcode` sudah memuat semua fitur `simulasibk` kecuali satu: **dropdown Jenis Pelanggaran dengan kotak pencarian** (teks panjang turun baris, tidak terpotong). Sekarang sudah ikut digabung (JS + CSS).
+- `DEFAULT_API_URL` **tidak diubah** (tetap URL milik versi barcode, karena backend-nya yang punya kolom Barcode & akun piket). Kalau ingin memakai URL Web App lain, ganti di `script.js` **dan** `piket.js`.
+
+**Yang baru**
+- Kolom **Foto Siswa** di form Tambah/Edit Siswa: tombol *Pilih Foto*, *Ambil dari Kamera* (di HP membuka kamera depan), *Hapus Foto*. Foto otomatis dipotong rasio 3:4 (wajah diprioritaskan di bagian atas), dikecilkan 168×224 px dan dikompres (±8–16 KB) supaya aman di batas sel Google Sheet.
+- Foto tampil di tabel Data Siswa, daftar pilih siswa, Mode Kamera (QR) di aplikasi utama, dan halaman `piket.html`.
+- **Kartu pelajar QR** didesain ulang (85,6×54 mm): header sekolah, foto 3:4, nama/kelas/NIS, dan QR lebih besar (20 mm) supaya mudah dipindai. Siswa tanpa foto memakai inisial.
+- Tombol **Cetak Kartu** (ikon kartu) di tiap baris Data Siswa (Admin) untuk mencetak 1 kartu langsung; kode QR dibuat otomatis kalau belum ada. *Cetak Kartu QR (Massal)* dan tombol cetak di form ikut memakai desain baru + foto.
+- Service worker naik ke `bkdigital-v11`.
+
+**Wajib di backend (Code.gs)** — lihat `BACKEND-PATCH-Code.gs.txt`:
+1. Tambah `'Foto'` di akhir header Siswa pada `DEFAULT_HEADERS` (wajib).
+2. (Opsional) Edit kecil `piketScanCode()` agar foto ikut dikirim ke halaman piket.
+Lalu Deploy → Manage deployments → pensil → New version → Deploy.
+
+**Catatan**
+- Foto disimpan sebagai teks (base64) di kolom `Foto`, sehingga ikut terunduh setiap kali aplikasi memuat data. Untuk ±500 siswa kira-kira 5 MB; kalau nanti ribuan siswa, sebaiknya foto dipindah ke Google Drive.
+- Foto tidak ikut ke arsip **SiswaLulus** saat kelulusan.
+- Foto hanya bisa diubah oleh Admin (Konselor/Guru Mapel tidak punya akses edit Data Siswa).
