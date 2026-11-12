@@ -2012,7 +2012,7 @@ function openBulkBarcodePrint(){
       }
       renderCurrentPage();
       closeModal();
-      printBulkBarcodeCards(students, schoolName, schoolYear);
+      printBulkBarcodeCards(students, schoolName, schoolYear, SCHOOL_LOGO);
     }catch(err){
       toast(err.message, 'error');
     }finally{
@@ -2024,7 +2024,7 @@ function openBulkBarcodePrint(){
 }
 $('#btnBulkPrintBarcode').addEventListener('click', openBulkBarcodePrint);
 
-function printBulkBarcodeCards(students, schoolName, schoolYear){
+function printBulkBarcodeCards(students, schoolName, schoolYear, schoolLogo){
   if (!students.length){ toast('Tidak ada siswa untuk dicetak.', 'error'); return; }
   const w = window.open('', '_blank');
   if (!w){ toast('Popup diblokir browser. Izinkan popup untuk mencetak kartu.', 'error'); return; }
@@ -2033,6 +2033,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
   // QR digenerate DI HALAMAN INI (library sudah pasti termuat), hasilnya (data URL gambar)
   // ditempel langsung ke kartu — jendela cetak tidak perlu memuat apa pun lagi.
   // Foto siswa juga data URL, jadi tampil tanpa koneksi internet.
+  const logo = (schoolLogo && String(schoolLogo).indexOf('data:image/') === 0) ? String(schoolLogo) : '';
   const cardsHtml = students.map((s) => {
     const code = (s.Barcode || '').toString();
     const qrDataUrl = makeQrDataUrl(code, 6, 2);
@@ -2040,8 +2041,12 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
     return `
     <div class="card">
       <div class="card-head">
-        ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
-        <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR${schoolYear ? ' &middot; TA ' + safe(schoolYear) : ''}</div>
+        ${logo ? `<img class="card-logo" src="${logo}" alt="" />` : ''}
+        <div class="card-headtext">
+          ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
+          <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR${schoolYear ? ' &middot; TA ' + safe(schoolYear) : ''}</div>
+        </div>
+        ${logo ? `<span class="card-logo-spacer"></span>` : ''}
       </div>
       <div class="card-body">
         <div class="card-photo">${foto ? `<img src="${foto}" alt="" />` : `<span>${safe(initials(s.Nama))}</span>`}</div>
@@ -2068,23 +2073,26 @@ function printBulkBarcodeCards(students, schoolName, schoolYear){
         width:85.6mm; height:53.98mm; border:1px solid #2F6F63; border-radius:3mm; background:#fff;
         display:flex; flex-direction:column; overflow:hidden; page-break-inside:avoid; break-inside:avoid;
       }
-      .card-head{ background:#2F6F63; color:#fff; text-align:center; padding:1.6mm 3mm 1.4mm; }
-      .card-school{ font-size:9.5px; font-weight:700; text-transform:uppercase; line-height:1.15; }
-      .card-title{ font-size:6.5px; font-weight:600; letter-spacing:.4px; opacity:.85; margin-top:.4mm; }
+      .card-head{ background:#2F6F63; color:#fff; text-align:center; padding:1.6mm 3mm 1.4mm; display:flex; align-items:center; gap:2mm; }
+      .card-headtext{ flex:1; min-width:0; }
+      .card-logo{ width:9mm; height:9mm; object-fit:contain; background:#fff; border-radius:50%; padding:.6mm; flex-shrink:0; display:block; }
+      .card-logo-spacer{ width:9mm; flex-shrink:0; }
+      .card-school{ font-size:11px; font-weight:700; text-transform:uppercase; line-height:1.15; }
+      .card-title{ font-size:7px; font-weight:600; letter-spacing:.4px; opacity:.85; margin-top:.4mm; }
       .card-body{ flex:1; min-height:0; display:flex; align-items:center; gap:2.5mm; padding:2mm 3mm; }
       .card-photo{
-        width:19mm; height:25.3mm; flex-shrink:0; border:1px solid #2F6F63; border-radius:1.5mm; background:#EAF3F1;
-        overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2F6F63;
+        width:21mm; height:28mm; flex-shrink:0; border:1px solid #2F6F63; border-radius:1.5mm; background:#EAF3F1;
+        overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#2F6F63;
       }
       .card-photo img{ width:100%; height:100%; object-fit:cover; object-position:center top; display:block; }
       .card-info{ min-width:0; flex:1; }
-      .card-nama{ font-size:10.5px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
-      .card-meta{ font-size:8.5px; color:#555; margin-top:1mm; }
+      .card-nama{ font-size:13.5px; font-weight:800; color:#16211c; line-height:1.2; word-break:break-word; }
+      .card-meta{ font-size:12px; color:#444; margin-top:1.4mm; }
       .card-meta b{ color:#16211c; }
-      .card-qrbox{ width:20mm; flex-shrink:0; text-align:center; }
-      .card-qr{ width:20mm; height:20mm; display:block; }
+      .card-qrbox{ width:22mm; flex-shrink:0; text-align:center; }
+      .card-qr{ width:22mm; height:22mm; display:block; }
       .card-qr--fail{ display:flex; align-items:center; justify-content:center; font-size:6px; color:#c0392b; border:1px dashed #c0392b; }
-      .card-code{ font-size:6px; color:#777; margin-top:.5mm; word-break:break-all; }
+      .card-code{ font-size:6.5px; color:#777; margin-top:.5mm; word-break:break-all; }
       @media print{ body{ background:#fff; padding:0; } }
     </style></head><body>
     <div class="sheet">${cardsHtml}</div>

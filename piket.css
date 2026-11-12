@@ -32,7 +32,9 @@ button,input,select{ font-family:inherit; font-size:14px; }
 .pk-login{ min-height:100%; display:flex; align-items:center; justify-content:center; padding:20px;
   background:linear-gradient(160deg,var(--primary-dark),var(--primary)); }
 .pk-login-card{ width:100%; max-width:380px; background:#fff; border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); padding:28px 26px; text-align:center; }
-.pk-login-logo{ width:64px; height:64px; border-radius:16px; margin-bottom:8px; }
+.pk-login-logo{ width:72px; height:72px; border-radius:16px; margin-bottom:8px; object-fit:contain; background:#fff; }
+.pk-login-school{ margin:2px 0 4px; font-size:14px; font-weight:700; color:var(--primary); text-transform:uppercase; letter-spacing:.3px; }
+.pk-login-school:empty{ display:none; }
 .pk-login-card h1{ margin:0; font-family:var(--font-display); font-size:24px; }
 .pk-login-sub{ margin:4px 0 18px; color:var(--ink-soft); font-size:14px; }
 .pk-login-card label{ display:block; text-align:left; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin:12px 0 5px; }
