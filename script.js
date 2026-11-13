@@ -25,7 +25,7 @@ const STATE = { siswa:[], absensi:[], pelanggaran:[], konseling:[], kolaborasi:[
    situs ini (lihat PANDUAN-UPDATE.md), supaya guru mapel tidak perlu tahu atau
    menempel URL Apps Script sama sekali. Kalau dikosongkan, layar Admin BK tetap
    bisa mengisi URL secara manual seperti sebelumnya (mode lama tidak rusak). */
-const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwDsz8Ih6qT9RC__fA00UvleSH7imgEh1GvazMoy9iCT1oRrBd2B1QHl8kr6bAVjiIMww/exec';
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbySCG5Xdl_fZldq7gpcvS2bWvoh4yfTHuDuL94XFBX5RMH2aH_8pG_lDGd5Ajgoh48PSg/exec';
 
 /* URL Web App yang pernah tersimpan di browser (localStorage) dulu SELALU menang atas
    DEFAULT_API_URL, jadi setelah URL di file ini diganti, browser yang sudah pernah login
@@ -227,6 +227,13 @@ const RealAdapter = {
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Gagal menyimpan kode QR');
     return json.data;
+  },
+  /* Simpan foto banyak siswa sekaligus (items = [{ id, foto }]) dalam satu permintaan. */
+  async setFotoBulk(items){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'setFotoBulk', items, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menyimpan foto siswa');
+    return json.data;
   }
 };
 
@@ -310,6 +317,15 @@ const DemoAdapter = {
   },
   async getPiketAccount(){ return { username:'', nama:'', passwordSet:false, demo:true }; },
   async savePiketAccount(){ throw new Error('Akun Guru Piket hanya tersedia saat tersambung ke server (bukan Mode Demo).'); },
+  /* Padanan setFotoBulk di RealAdapter (mode demo). */
+  async setFotoBulk(items){
+    const map = new Map((items||[]).map(i => [String(i.id), i.foto]));
+    const arr = this.read('siswa');
+    let updated = 0;
+    arr.forEach(s => { if (map.has(String(s.ID))){ s.Foto = map.get(String(s.ID)); updated++; } });
+    this.write('siswa', arr);
+    return { updated };
+  },
   /* Padanan setBarcodeBulk di RealAdapter (mode demo). */
   async setBarcodeBulk(items){
     const map = new Map((items||[]).map(i => [String(i.id), i.barcode]));
@@ -2152,6 +2168,165 @@ function printBulkBarcodeCards(students, schoolName, schoolYear, schoolLogo){
   w.document.close();
 }
 
+
+/* ---------------- UPLOAD FOTO SISWA MASSAL (ZIP, nama file = NIS/NISN) ----------------
+   Alur: pilih 1 file .zip berisi foto (JPG/PNG/WEBP) yang nama filenya NIS atau
+   NISN siswa, mis. "2301001.jpg" → otomatis dicocokkan ke siswa, dipotong 3:4 &
+   dikompres (sama seperti upload satu-satu), lalu disimpan sekaligus per batch.
+   Foto lama siswa yang cocok otomatis DIGANTI. Folder di dalam zip & file
+   __MACOSX diabaikan. RAR tidak didukung browser — ubah dulu ke ZIP. */
+const FOTO_ZIP_BATCH = 40;      // jumlah foto per permintaan ke server
+const FOTO_ZIP_MAX_MB = 300;    // batas ukuran file zip
+function loadJsZip(){
+  if (typeof JSZip !== 'undefined') return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    sc.onload = () => resolve();
+    sc.onerror = () => reject(new Error('Library ZIP gagal dimuat. Periksa koneksi internet lalu coba lagi.'));
+    document.head.appendChild(sc);
+  });
+}
+function fotoKeyNorm(v){ return String(v == null ? '' : v).trim().toLowerCase(); }
+function fotoKeyNoZero(v){ return fotoKeyNorm(v).replace(/^0+/, ''); }
+/* Kunci pencarian dari nama file: nama lengkap dulu, lalu potongan pertama
+   (mis. "2301001 (1)" / "2301001_foto" tetap cocok ke 2301001). */
+function fotoNameCandidates(base){
+  const out = [base];
+  base.split(/[\s_\-.()]+/).filter(Boolean).forEach(t => { if (out.indexOf(t) === -1) out.push(t); });
+  return out;
+}
+function buildSiswaFotoIndex(){
+  const exact = new Map(), noZero = new Map();
+  (STATE.siswa || []).forEach(s => {
+    [s.NIS, s.NISN].forEach(k => {
+      const a = fotoKeyNorm(k), b = fotoKeyNoZero(k);
+      if (a && !exact.has(a)) exact.set(a, s);
+      if (b && !noZero.has(b)) noZero.set(b, s);
+    });
+  });
+  return { exact, noZero };
+}
+function findSiswaForFotoName(base, idx){
+  const cands = fotoNameCandidates(base);
+  for (const c of cands){ const s = idx.exact.get(fotoKeyNorm(c)); if (s) return s; }
+  for (const c of cands){ const k = fotoKeyNoZero(c); if (k){ const s = idx.noZero.get(k); if (s) return s; } }
+  return null;
+}
+const nextTick = () => new Promise(r => setTimeout(r, 0));
+
+async function importFotoZip(file){
+  if (!file) return;
+  if (!/\.zip$/i.test(file.name)){
+    toast(/\.rar$/i.test(file.name)
+      ? 'File RAR belum didukung browser. Ubah dulu ke ZIP (klik kanan folder foto > Send to > Compressed folder).'
+      : 'Pilih file berformat .zip.', 'error');
+    return;
+  }
+  if (file.size > FOTO_ZIP_MAX_MB * 1024 * 1024){ toast(`File zip terlalu besar (maks ${FOTO_ZIP_MAX_MB} MB).`, 'error'); return; }
+  if (!(STATE.siswa || []).length){ toast('Data siswa masih kosong. Import/tambah data siswa dulu.', 'error'); return; }
+
+  showLoading(true);
+  try{
+    await loadJsZip();
+    toast('Membaca file zip…');
+    const zip = await JSZip.loadAsync(file);
+    const idx = buildSiswaFotoIndex();
+    const matched = new Map();   // ID siswa -> { s, entry, fileName }
+    const unmatched = [], notImage = [];
+    let duplicates = 0, totalFiles = 0;
+    zip.forEach((path, entry) => {
+      if (entry.dir) return;
+      const parts = path.split('/');
+      const name = parts[parts.length - 1];
+      if (!name || name.charAt(0) === '.' || path.indexOf('__MACOSX') !== -1) return;
+      totalFiles++;
+      const m = name.match(/^(.*)\.(jpe?g|png|webp)$/i);
+      if (!m){ notImage.push(name); return; }
+      const s = findSiswaForFotoName(m[1], idx);
+      if (!s){ unmatched.push(name); return; }
+      if (matched.has(String(s.ID))) duplicates++;
+      matched.set(String(s.ID), { s, entry, fileName: name, ext: m[2].toLowerCase() });
+    });
+
+    if (!matched.size){
+      showLoading(false);
+      showFotoZipSummary({ totalFiles, saved: 0, failedProcess: [], unmatched, notImage, duplicates, saveFailed: 0 });
+      return;
+    }
+
+    // 1) Proses gambar (potong 3:4 + kompres) satu per satu supaya memori aman.
+    const items = [], failedProcess = [];
+    let done = 0;
+    for (const m of matched.values()){
+      done++;
+      toast(`Memproses foto ${done} dari ${matched.size}…`);
+      try{
+        const buf = await m.entry.async('blob');
+        const type = m.ext === 'png' ? 'image/png' : (m.ext === 'webp' ? 'image/webp' : 'image/jpeg');
+        const f = new File([buf], m.fileName, { type });
+        const foto = await processStudentPhoto(f);
+        items.push({ id: m.s.ID, foto, s: m.s });
+      }catch(e){ failedProcess.push(m.fileName); }
+      if (done % 5 === 0) await nextTick();
+    }
+
+    // 2) Simpan per batch (satu permintaan per 40 foto).
+    let saved = 0, saveFailed = 0;
+    for (let i = 0; i < items.length; i += FOTO_ZIP_BATCH){
+      const chunk = items.slice(i, i + FOTO_ZIP_BATCH);
+      toast(`Menyimpan foto ${Math.min(i + chunk.length, items.length)} dari ${items.length}…`);
+      try{
+        if (typeof adapter.setFotoBulk !== 'function') throw new Error('unsupported');
+        await adapter.setFotoBulk(chunk.map(c => ({ id: c.id, foto: c.foto })));
+        chunk.forEach(c => { c.s.Foto = c.foto; });
+        saved += chunk.length;
+      }catch(bulkErr){
+        // Backend lama (belum ada setFotoBulk): cadangan update paralel 4 sekaligus.
+        let k = 0;
+        const worker = async () => {
+          while (k < chunk.length){
+            const c = chunk[k++];
+            try{ await adapter.update('siswa', c.id, { Foto: c.foto }); c.s.Foto = c.foto; saved++; }
+            catch(e){ saveFailed++; }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, chunk.length) }, worker));
+      }
+    }
+
+    renderCurrentPage();
+    showLoading(false);
+    showFotoZipSummary({ totalFiles, saved, failedProcess, unmatched, notImage, duplicates, saveFailed });
+  }catch(err){
+    showLoading(false);
+    toast(err.message || 'Gagal membaca file zip.', 'error');
+  }
+}
+
+function showFotoZipSummary(r){
+  const esc = escapeHtml;
+  const list = (arr) => arr.slice(0, 15).map(n => `<li>${esc(n)}</li>`).join('') + (arr.length > 15 ? `<li>…dan ${arr.length - 15} lainnya</li>` : '');
+  $('#modalTitle').textContent = 'Hasil Upload Foto Massal';
+  $('#modalBody').innerHTML = `
+    <p><b>${r.saved}</b> foto siswa berhasil disimpan dari <b>${r.totalFiles}</b> file di dalam zip.</p>
+    ${r.duplicates ? `<p class="muted">${r.duplicates} file ganda untuk siswa yang sama — dipakai file yang terakhir.</p>` : ''}
+    ${r.saveFailed ? `<p style="color:#c0392b"><b>${r.saveFailed}</b> foto gagal disimpan ke server. Coba upload ulang file zip yang sama.</p>` : ''}
+    ${r.unmatched.length ? `<p style="margin-top:10px"><b>${r.unmatched.length}</b> file tidak cocok dengan NIS/NISN siswa mana pun:</p><ul style="max-height:140px;overflow:auto;margin:4px 0 10px 18px">${list(r.unmatched)}</ul>` : ''}
+    ${r.failedProcess.length ? `<p><b>${r.failedProcess.length}</b> file gambar tidak bisa dibaca:</p><ul style="max-height:100px;overflow:auto;margin:4px 0 10px 18px">${list(r.failedProcess)}</ul>` : ''}
+    ${r.notImage.length ? `<p class="muted">${r.notImage.length} file dilewati karena bukan JPG/PNG/WEBP.</p>` : ''}
+    <div class="modal-actions"><button type="button" class="btn btn-primary" id="fotoZipDone">Selesai</button></div>`;
+  $('#fotoZipDone').addEventListener('click', closeModal);
+  openModal();
+}
+
+$('#btnImportFotoZip').addEventListener('click', () => $('#importFotoZipFile').click());
+$('#importFotoZipFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  await importFotoZip(file);
+});
+
 /* ---------------- KIOSK ABSENSI KAMERA (scan kartu QR) ----------------
    Alur: kamera nyala & standby menunggu kartu QR → siswa tunjukkan
    kartu ke kamera → sistem mencocokkan kode dengan kolom Barcode di data
@@ -3661,7 +3836,7 @@ function applyRoleUI(){
      hanya untuk tipe yang memang masih tertutup total buat Konselor (Data Siswa)
      dan fitur admin-only (Absen Massal, Import Siswa) yang tetap
      ditolak server siapa pun selain Admin. */
-  ['#btnAddSiswa','#btnImportSiswa','#btnBulkPrintBarcode']
+  ['#btnAddSiswa','#btnImportSiswa','#btnImportFotoZip','#btnBulkPrintBarcode']
     .forEach(sel => { const el = $(sel); if (el) el.classList.toggle('hidden', isKonselor); });
   /* Menu "Kenaikan & Kelulusan" mengelola Data Siswa secara massal (termasuk
      menghapus siswa saat kelulusan) — backend hanya mengizinkan Admin/Guru BK
