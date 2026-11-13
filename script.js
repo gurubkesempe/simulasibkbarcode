@@ -25,7 +25,7 @@ const STATE = { siswa:[], absensi:[], pelanggaran:[], konseling:[], kolaborasi:[
    situs ini (lihat PANDUAN-UPDATE.md), supaya guru mapel tidak perlu tahu atau
    menempel URL Apps Script sama sekali. Kalau dikosongkan, layar Admin BK tetap
    bisa mengisi URL secara manual seperti sebelumnya (mode lama tidak rusak). */
-const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbxTil90h9mhtfYzm0gxwb3p9uswatGxGLLkxFGFWkivswNXIGKy7jM2lP7QyJ6LX37G/exec';
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbySCG5Xdl_fZldq7gpcvS2bWvoh4yfTHuDuL94XFBX5RMH2aH_8pG_lDGd5Ajgoh48PSg/exec';
 
 /* URL Web App yang pernah tersimpan di browser (localStorage) dulu SELALU menang atas
    DEFAULT_API_URL, jadi setelah URL di file ini diganti, browser yang sudah pernah login
@@ -219,6 +219,14 @@ const RealAdapter = {
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Gagal menghapus data siswa terpilih');
     return json.data;
+  },
+  /* Isi kolom Barcode banyak siswa sekaligus dalam SATU permintaan
+     (items = [{ id, barcode }]). Hanya mengisi yang masih kosong. */
+  async setBarcodeBulk(items){
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify({ action:'setBarcodeBulk', items, token: API_TOKEN }) });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Gagal menyimpan kode QR');
+    return json.data;
   }
 };
 
@@ -302,6 +310,15 @@ const DemoAdapter = {
   },
   async getPiketAccount(){ return { username:'', nama:'', passwordSet:false, demo:true }; },
   async savePiketAccount(){ throw new Error('Akun Guru Piket hanya tersedia saat tersambung ke server (bukan Mode Demo).'); },
+  /* Padanan setBarcodeBulk di RealAdapter (mode demo). */
+  async setBarcodeBulk(items){
+    const map = new Map((items||[]).map(i => [String(i.id), i.barcode]));
+    const arr = this.read('siswa');
+    let updated = 0;
+    arr.forEach(s => { if (map.has(String(s.ID)) && !String(s.Barcode||'').trim()){ s.Barcode = map.get(String(s.ID)); updated++; } });
+    this.write('siswa', arr);
+    return { updated };
+  },
   /* Padanan promoteSiswa di RealAdapter, murni di localStorage untuk mode demo. */
   async promoteSiswa(ids, kelasTujuan){
     const idSet = new Set((ids||[]).map(String));
@@ -1906,6 +1923,39 @@ async function ensureSiswaBarcode(s){
   return code;
 }
 
+/* Versi massal: siswa yang belum punya kode dibuatkan kodenya dan disimpan
+   dalam SATU permintaan (bukan satu-satu). Kalau backend belum diperbarui,
+   dicadangkan ke update paralel (6 sekaligus) — tetap jauh lebih cepat
+   daripada satu per satu. Kegagalan simpan tidak menghentikan pencetakan:
+   kartu tetap bisa dicetak, kodenya hanya belum tersimpan. */
+async function ensureSiswaBarcodesBulk(students){
+  const missing = [];
+  students.forEach(s => {
+    if (!(s.Barcode || '').toString().trim()){
+      const code = 'BK-' + (s.NIS || s.ID);
+      s.Barcode = code;          // dipakai untuk kartu saat ini
+      missing.push({ s, code });
+    }
+  });
+  if (!missing.length) return { generated: 0, saved: true };
+  try{
+    if (typeof adapter.setBarcodeBulk !== 'function') throw new Error('unsupported');
+    await adapter.setBarcodeBulk(missing.map(m => ({ id: m.s.ID, barcode: m.code })));
+    return { generated: missing.length, saved: true };
+  }catch(bulkErr){
+    let failed = 0, idx = 0;
+    const worker = async () => {
+      while (idx < missing.length){
+        const m = missing[idx++];
+        try{ await adapter.update('siswa', m.s.ID, { Barcode: m.code }); }
+        catch(e){ failed++; }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, missing.length) }, worker));
+    return { generated: missing.length, saved: failed === 0 };
+  }
+}
+
 /* Cetak kartu 1 siswa langsung dari baris tabel Data Siswa. */
 async function printCardForSiswa(id){
   const s = siswaById(id);
@@ -2003,15 +2053,12 @@ function openBulkBarcodePrint(){
 
     showLoading(true);
     try{
-      const students = [];
-      for (const id of ids){
-        const s = siswaById(id);
-        if (!s) continue;
-        await ensureSiswaBarcode(s);
-        students.push(s);
-      }
+      const students = ids.map(id => siswaById(id)).filter(Boolean);
+      const info = await ensureSiswaBarcodesBulk(students);
+      if (!info.saved) toast('Sebagian kode QR belum tersimpan ke server, tapi kartu tetap bisa dicetak.', 'error');
       renderCurrentPage();
       closeModal();
+      await new Promise(r => setTimeout(r, 30)); // beri waktu browser menutup modal sebelum kerja berat
       printBulkBarcodeCards(students, schoolName, schoolYear, SCHOOL_LOGO);
     }catch(err){
       toast(err.message, 'error');
@@ -2033,6 +2080,8 @@ function printBulkBarcodeCards(students, schoolName, schoolYear, schoolLogo){
   // QR digenerate DI HALAMAN INI (library sudah pasti termuat), hasilnya (data URL gambar)
   // ditempel langsung ke kartu — jendela cetak tidak perlu memuat apa pun lagi.
   // Foto siswa juga data URL, jadi tampil tanpa koneksi internet.
+  // Logo: pakai yang dikirim pemanggil; kalau kosong, ambil logo sekolah yang tersimpan (semua jalur cetak jadi konsisten).
+  schoolLogo = schoolLogo || SCHOOL_LOGO || localStorage.getItem('bk_school_logo') || '';
   const logo = (schoolLogo && String(schoolLogo).indexOf('data:image/') === 0) ? String(schoolLogo) : '';
   const cardsHtml = students.map((s) => {
     const code = (s.Barcode || '').toString();
@@ -2041,7 +2090,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear, schoolLogo){
     return `
     <div class="card">
       <div class="card-head">
-        ${logo ? `<img class="card-logo" src="${logo}" alt="" />` : ''}
+        ${logo ? `<span class="card-logo"></span>` : ''}
         <div class="card-headtext">
           ${schoolName ? `<div class="card-school">${safe(schoolName)}</div>` : ''}
           <div class="card-title">KARTU PELAJAR &middot; ABSENSI QR${schoolYear ? ' &middot; TA ' + safe(schoolYear) : ''}</div>
@@ -2075,7 +2124,7 @@ function printBulkBarcodeCards(students, schoolName, schoolYear, schoolLogo){
       }
       .card-head{ background:#2F6F63; color:#fff; text-align:center; padding:1.6mm 3mm 1.4mm; display:flex; align-items:center; gap:2mm; }
       .card-headtext{ flex:1; min-width:0; }
-      .card-logo{ width:9mm; height:9mm; object-fit:contain; background:#fff; border-radius:50%; padding:.6mm; flex-shrink:0; display:block; }
+      .card-logo{ width:9mm; height:9mm; background:#fff ${logo ? `url("${logo}")` : ''} center/80% no-repeat; border-radius:50%; flex-shrink:0; display:block; }
       .card-logo-spacer{ width:9mm; flex-shrink:0; }
       .card-school{ font-size:11px; font-weight:700; text-transform:uppercase; line-height:1.15; }
       .card-title{ font-size:7px; font-weight:600; letter-spacing:.4px; opacity:.85; margin-top:.4mm; }
